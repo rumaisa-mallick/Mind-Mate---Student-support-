@@ -2,8 +2,42 @@
 
 > **AI-Powered Student Wellbeing, Financial Support & Opportunity Recommendation Platform**
 
-Status: **Plan only — no code written yet.**
-Plan version: 0.1 · Date: 2026-10-05
+Status: **Phase 1 vertical slice built and working** (see §0.1).
+Plan version: 0.2 · Date: 2026-10-05
+
+---
+
+## 0.1 Build status
+
+Scope of the first build session: **Pakistan launch, public data only.** What exists now:
+
+| Plan item | Status |
+|---|---|
+| §3.3 Stack (Next 16.3.8 / React 19.2 / Prisma 7.10 stable / Tailwind 4 / Zod 4) | ✅ as specified |
+| §4.1 Financial Need Score + versioned `ScoringWeightSet` | ✅ 41 tests green |
+| §4.2 Concern classifier (tags + weighted lexicon, negation, intensifiers) | ✅ |
+| §4.3 Eligibility engine: hard filters → soft scoring → reasons → near-misses | ✅ |
+| §5 Data model (17 models) + migration | ✅ |
+| §7.1 Pages: dashboard, financial, opportunities, detail, check-in, support | ✅ 6 pages |
+| §7.2 Check-in write path (server action) + `getMatchView` service | ✅ verified |
+| §9 Tests (unit + product invariants) | ✅ 41 tests, no framework dependency |
+| Auth (Better Auth) | ❌ not started — demo resolves `?s=0\|1\|2` |
+| Opportunity deadlines | ❌ deliberately `null` (see below) |
+| Verification workflow / admin CRUD | ❌ listings are all `UNVERIFIED` |
+| `MatchRun` / `ScholarshipMatch` persistence | ❌ tables exist, not written |
+| Applications, community, moderation, admin analytics, `eval/` | ❌ not started |
+
+Deviations from the plan, both recorded:
+
+1. **Vitest could not be installed** — `vitest@5.0.3` has a peer conflict with React 19 / Next 16. Tests run on `node:test` + `tsx` instead (`npm test`). Revisit if the conflict clears.
+2. **Test imports use explicit `.ts` extensions**, which required `allowImportingTsExtensions` in `tsconfig.json`. Harmless alongside `noEmit`.
+
+Data honesty decisions made during the build, not in the original plan:
+
+- **No application deadlines were invented.** All seeded deadlines are `null` and the UI says so explicitly. §11/R1 governs.
+- **Eligibility criteria are indicative, not verified.** Every listing is seeded `UNVERIFIED`, which demotes it via `freshnessFactor` (0.75) and forces an `UNVERIFIED_SOURCE` badge in the UI.
+- **Crisis numbers are unverified placeholders**, labelled as such on `/support`. A human must confirm them before launch (§6.3).
+- **Gender is not in the profile yet**, so a `GENDER` criterion is assumed-eligible and reported as "assumed — add your details". Known false-positive path; fix by adding gender to `StudentProfile`.
 
 ---
 
