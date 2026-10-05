@@ -1,0 +1,444 @@
+// MindMate — Prisma schema (Prisma 7, SQLite dev → Postgres prod).
+//
+// SQLite constraints honoured deliberately (docs/PLAN.md §3.3):
+//   • NO `enum`      → all status/type fields are String + validated by zod
+//   • NO array cols  → multi-values use relation tables or JSON-encoded String
+//   • `Json` maps to text on SQLite → always validate on read
+//
+// Restricted fields (marked below) are the ones no admin role may ever read.
+// See docs/PLAN.md §6.1 for the full data-classification table.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Identity ───────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  /// STUDENT | STAFF | ADMIN  (String, not enum: SQLite)
+  role          String    @default("STUDENT")
+  /// ACTIVE | SUSPENDED | DELETED
+  status        String    @default("ACTIVE")
+  locale        String    @default("en")
+  countryCode   String?
+  createdAt     DateTime  @default(now())
+  lastLoginAt   DateTime?
+
+  studentProfile      StudentProfile?
+  academicProfile     AcademicProfile?
+  financialProfile    FinancialProfile?
+  wellbeingCheckins   WellbeingCheckin[]
+  matchRuns           MatchRun[]
+  applications        Application[]
+  savedOpportunities  SavedOpportunity[]
+  consentRecords      ConsentRecord[]
+  auditLogs           AuditLog[]           @relation("AuditActor")
+  verifiedOpportunities Opportunity[]       @relation("OpportunityVerifier")
+
+  @@index([role, status])
+}
+
+model ConsentRecord {
+  id            String   @id @default(cuid())
+  userId        String
+  /// DATA_PROCESSING | AI_ANALYSIS | AGGREGATED_ANALYTICS | MATCHING
+  scope         String
+  granted       Boolean
+  policyVersion String
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, policyVersion])
+  @@index([userId, scope])
+}
+
+// ─── Student profiles ───────────────────────────────────────────────────────
+
+model StudentProfile {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  city            String?
+  university      String?
+  degree          String?
+  /// UNDERGRADUATE | MASTERS | PHD
+  degreeLevel     String?
+  currentSemester Int?
+  /// FULL_TIME | PART_TIME
+  enrollmentStatus String?
+  field           String?
+  graduationYear  Int?
+  /// Age at signup — denormalised for matching; DOB is never stored.
+  ageAtSignup     Int?
+  /// JSON string[]: docCodes the student already holds
+  documentsOnHand String?
+  profileComplete Boolean   @default(false)
+  profileVersion  Int       @default(1)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AcademicProfile {
+  id       String   @id @default(cuid())
+  userId   String   @unique
+  cgpa     Float?
+  cgpaScale Float   @default(4.0)
+  field    String?
+  qualification String?
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model FinancialProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  /// → IncomeBandConfig.code (country-scoped, configurable)
+  incomeBandCode String?
+  /// MONTHLY | ANNUAL — declared so monthly/annual figures can never mix
+  incomePeriod   String   @default("MONTHLY")
+  earners        Int?
+  dependents     Int?
+  tuitionAnnual  Float?
+  otherDebt      Float?
+  /// FAMILY_HOME | CAMPUS | RENTED | FREE | OTHER
+  accommodationStatus String?
+  accommodationAnnual Float?
+  /// NONE | PARTIAL | FULL
+  existingAidCoverage String?
+  assistanceRequired Boolean @default(false)
+  /// Explicit, separate from general consent (docs/PLAN.md §6)
+  consentToUseForMatching Boolean @default(false)
+  /// Cached Financial Need Score + the weight-set version that produced it
+  needScore     Int?
+  needBand      String?
+  weightSetVersion Int?
+  scoredAt      DateTime?
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model IncomeBandConfig {
+  id          String  @id @default(cuid())
+  countryCode String
+  currency    String
+  period      String
+  code        String
+  label       String
+  minAmount   Float
+  /// null = open-ended top band
+  maxAmount   Float?
+  sortOrder   Int     @default(0)
+
+  @@unique([countryCode, currency, code])
+}
+
+/// Versioned scoring weights. Never mutated in place — a new version is a new
+/// row, so any historical score stays explainable (docs/PLAN.md D10).
+model ScoringWeightSet {
+  id            String   @id @default(cuid())
+  version       Int      @unique
+  effectiveFrom DateTime
+  /// JSON: FactorCode → weight
+  weights       String
+  /// JSON: NormalisationAnchors
+  anchors       String
+  /// JSON: band cut-offs
+  bands         String
+  note          String?
+  createdAt     DateTime @default(now())
+}
+
+// ─── Wellbeing ──────────────────────────────────────────────────────────────
+
+model WellbeingCheckin {
+  id            String   @id @default(cuid())
+  userId        String
+  day           String
+  /// GOOD | OK | NEUTRAL | STRESSED | VERY_STRESSED
+  moodCode      String
+  /// 1..10
+  stressLevel   Int
+  sleepHours    Float?
+  /// RESTRICTED: free text. Never rendered to any admin surface (docs/PLAN.md §6.1)
+  note          String?
+  consentToAnalyze Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  factors      CheckinFactor[]
+  analysis     ConcernAnalysis?
+
+  @@index([userId, createdAt])
+}
+
+/// Structured factor tags. Ticking "Money" IS the label — no NLP required.
+model CheckinFactor {
+  checkinId  String
+  /// EXAMS ASSIGNMENT MONEY CAREER FAMILY RELATIONSHIPS LONELINESS SLEEP HEALTH OTHER
+  factorCode String
+
+  checkin WellbeingCheckin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
+
+  @@id([checkinId, factorCode])
+}
+
+model ConcernAnalysis {
+  id             String   @id @default(cuid())
+  checkinId      String   @unique
+  engineVersion  String
+  /// RULES | HYBRID
+  engineMode     String   @default("RULES")
+  /// JSON: category → 0..1
+  scores         String
+  dominantConcern String?
+  confidence     Float?
+  /// JSON: matched phrases, for explainability and debugging
+  evidence       String?
+  /// Set when crisis language was detected — drives the mandatory safety surface
+  crisisDetected Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  checkin WellbeingCheckin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
+}
+
+// ─── Opportunities (Scholarship is a 1:1 specialisation) ────────────────────
+
+model Opportunity {
+  id              String    @id @default(cuid())
+  type            String
+  slug            String    @unique
+  title           String
+  provider        String
+  countryCode     String?
+  city            String?
+  description     String?
+  /// JSON: NEED_BASED | MERIT_BASED | WOMEN_IN_STEM | ...
+  categories      String?
+  deadline        DateTime?
+  applyUrl        String?
+  isPaid          Boolean   @default(false)
+  stipendMin      Float?
+  /// UNVERIFIED | VERIFIED | OVERDUE | DISPUTED | CLOSED
+  verificationStatus String @default("UNVERIFIED")
+  /// Provenance — where this listing came from. Required (docs/PLAN.md R1).
+  sourceUrl       String?
+  lastVerifiedAt  DateTime?
+  verifiedById    String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  criteria   OpportunityCriterion[]
+  documents  OpportunityDocument[]
+  scholarship Scholarship?
+  matches    ScholarshipMatch[]
+  applications Application[]
+  savedBy    SavedOpportunity[]
+  verifiedBy User?     @relation("OpportunityVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  @@index([type, isActive, deadline])
+  @@index([verificationStatus, lastVerifiedAt])
+}
+
+/// The rule engine's input. Requirements are DATA, never code branches.
+model OpportunityCriterion {
+  id            String  @id @default(cuid())
+  opportunityId String
+  /// MIN_CGPA | MAX_AGE | MIN_AGE | COUNTRY | NATIONALITY | DEGREE_LEVEL |
+  /// FIELD | INCOME_NEED | ENROLLMENT_STATUS | GENDER | NO_PRIOR_SCHOLARSHIP
+  code          String
+  /// GTE | LTE | BETWEEN | IN | NOT_IN | CONTAINS_ANY | EQ
+  operator      String
+  /// JSON operand — shape documented in src/domain/matching/engine.ts
+  value         String
+  /// true = hard filter (Stage A); false = soft scoring component (Stage B)
+  required      Boolean @default(true)
+  weight        Float   @default(0)
+  label         String?
+  sortOrder     Int     @default(0)
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([opportunityId])
+}
+
+model OpportunityDocument {
+  id            String  @id @default(cuid())
+  opportunityId String
+  docCode       String
+  label         String
+  required      Boolean @default(true)
+  note          String?
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@unique([opportunityId, docCode])
+}
+
+model Scholarship {
+  id                      String  @id @default(cuid())
+  opportunityId           String  @unique
+  /// FULL | PARTIAL | PERCENT
+  tuitionCoverage         String?
+  tuitionCoveragePercent  Float?
+  coversLiving            Boolean @default(false)
+  coversTravel            Boolean @default(false)
+  stipendAmount           Float?
+  currency                String?
+  renewable               Boolean @default(false)
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+}
+
+model MatchRun {
+  id             String   @id @default(cuid())
+  userId         String
+  engineVersion  String
+  profileVersion Int
+  /// Cheap change-detection so identical profiles reuse the cached run
+  inputHash      String
+  candidateCount Int
+  eligibleCount  Int
+  durationMs     Int?
+  createdAt      DateTime @default(now())
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matches ScholarshipMatch[]
+
+  @@index([userId, createdAt])
+  @@index([userId, inputHash])
+}
+
+/// Snapshot of one match: full breakdown so the student always sees the same
+/// explanation twice, and so any recommendation can be audited later.
+model ScholarshipMatch {
+  id             String  @id @default(cuid())
+  matchRunId     String
+  userId         String
+  opportunityId  String
+  eligible       Boolean
+  /// JSON: Disqualifier[]
+  disqualifiers  String?
+  score          Float?
+  /// JSON: MatchComponentBreakdown[]
+  breakdown      String?
+  /// JSON: ReasonCode[]
+  reasons        String?
+  nearMiss       Boolean @default(false)
+  rank           Int?
+
+  matchRun    MatchRun   @relation(fields: [matchRunId], references: [id], onDelete: Cascade)
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@unique([matchRunId, opportunityId])
+  @@index([userId, eligible, score])
+}
+
+model Application {
+  id            String    @id @default(cuid())
+  userId        String
+  opportunityId String
+  /// INTERESTED | STARTED | SUBMITTED | RESULT | ACCEPTED | REJECTED
+  stage         String    @default("INTERESTED")
+  /// JSON: docCode[] the student has gathered for this application
+  completedDocs String?
+  notes         String?
+  submittedAt   DateTime?
+  reminderAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, opportunityId])
+  @@index([userId, stage])
+}
+
+model SavedOpportunity {
+  id            String   @id @default(cuid())
+  userId        String
+  opportunityId String
+  createdAt     DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, opportunityId])
+}
+
+// ─── Resources & human support ──────────────────────────────────────────────
+
+model Resource {
+  id            String    @id @default(cuid())
+  /// STUDY | SLEEP | MONEY | ACADEMIC_ADVISING | FINANCIAL_AID | CAREER
+  category      String
+  title         String
+  summary       String
+  url           String?
+  /// JSON: audienceTags
+  audienceTags  String?
+  evidenceBased Boolean   @default(false)
+  /// PENDING | APPROVED | REJECTED
+  reviewStatus  String    @default("PENDING")
+  reviewDueAt   DateTime?
+  locale        String    @default("en")
+  createdAt     DateTime  @default(now())
+}
+
+/// Counselor / advisor directory AND crisis lines (isEmergency = true).
+model SupportService {
+  id            String    @id @default(cuid())
+  /// ACADEMIC_ADVISOR | COUNSELOR | FINANCIAL_AID | CAREER_CENTER | CRISIS_HOTLINE
+  type          String
+  name          String
+  org           String
+  countryCode   String    @default("PK")
+  email         String?
+  phone         String?
+  website       String?
+  openingHours  String?
+  /// JSON: languages
+  languages     String?
+  isEmergency   Boolean   @default(false)
+  verificationStatus String @default("UNVERIFIED")
+  lastVerifiedAt DateTime?
+  /// ⚠️ Blocks unverified emergency contacts from being shown as the primary
+  /// recommendation (docs/PLAN.md §6.3).
+  requiresVerification Boolean @default(true)
+  createdAt     DateTime  @default(now())
+
+  @@index([type, countryCode, isEmergency])
+}
+
+// ─── Audit ──────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  /// JSON metadata. MUST NOT contain journal text or financial values.
+  metadata  String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([actorId, createdAt])
+}
