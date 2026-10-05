@@ -39,11 +39,255 @@ export type SeedOpportunity = {
   tuitionCoveragePercent: number | null;
   coversLiving: boolean;
   coversTravel: boolean;
+  /**
+   * Full closing instant, written with an explicit offset.
+   *
+   * The offset is mandatory because it records *whose* wall clock the deadline
+   * is on. HEC publishes "20 Oct 2026, 4:00 PM" — that is PKT, i.e. 11:00 UTC.
+   * Writing `20 Oct 2026` and defaulting to end-of-day silently hands a student
+   * eight hours that do not exist, which is exactly how an application gets
+   * missed. Where an official page gives a date but no time, the entry says so
+   * in the description and 23:59 local is used.
+   *
+   * Left null wherever the current cycle date is not confirmed.
+   */
+  deadline?: string | null;
+  /**
+   * VERIFIED only where criteria AND deadline came from the official page.
+   * Anything omitted here defaults to UNVERIFIED in the seed script — the safe
+   * direction, since unverified rows are demoted and badged.
+   */
+  verificationStatus?: "VERIFIED" | "UNVERIFIED";
+  lastVerifiedAt?: string | null;
   criteria: { code: string; operator: string; value: Record<string, unknown>; label?: string }[];
   documents: { docCode: string; label: string; required: boolean }[];
 };
 
 const note = "Indicative criteria — confirm current requirements on the official page before applying.";
+
+/**
+ * ── VERIFIED, official-source programmes ────────────────────────────────────
+ * Every field below came from hec.gov.pk on 2026-10-05. These are the channels
+ * Pakistani students actually apply through, so the criteria are real:
+ *
+ *  · HEC Commonwealth (Masters & PhD) — HEC deadline 20 Oct 2026 4:00pm;
+ *    CSC closes the same day; 26 Masters + 30 PhD nominations; Pakistani/AJK
+ *    national and permanent resident; dual nationals excluded; first division
+ *    in the terminal degree; HAT score ≥ 60/100 mandatory (HAT-I..IV only).
+ *  · HEC Overseas Phase-III Batch-IV — deadline 28 Aug 2026 (now closed);
+ *    MS/MPhil and PhD only; top-200 QS/THE universities; HAT ≥ 60.
+ *  · Heydar Aliyev Grant (Azerbaijan) via HEC — deadline 20 Mar 2026 (closed);
+ *    3 slots; age limits vary by degree level, so no single MAX_AGE is applied.
+ *  · HEC Need-Based Scholarship — monthly family income ≤ Rs 45,000, not for
+ *    self-finance students; administered by the student's own university.
+ *  · Stipendium Hungaricum via HEC — documents due 15 Jan 2026 (closed);
+ *    Pakistani/AJK citizens, 18 on or before 31 Aug 2026, no upper age limit.
+ *
+ * Deadlines that have passed are left in place on purpose: the engine reports
+ * them as closed, which is the honest answer and exercises that path.
+ */
+export const PK_HEC_PROGRAMMES: SeedOpportunity[] = [
+  {
+    slug: "hec-commonwealth-masters-phd-2027",
+    type: "SCHOLARSHIP",
+    title: "HEC — Commonwealth Scholarships for Masters & PhD (2027-28)",
+    provider: "Higher Education Commission of Pakistan / CSC",
+    countryCode: "GB",
+    description:
+      "HEC-nominated Commonwealth awards for full-time taught Master's and PhD study at UK universities, starting September/October 2027. Covers tuition, living costs and travel. 26 Master's and 30 PhD nominations are offered. Applicants must be Pakistani/AJ&K nationals and permanent residents (dual nationals are not eligible), hold a first division in their terminal degree, and provide a HAT score of at least 60/100 — only general HAT tests are accepted.",
+    categories: ["FULLY_FUNDED", "MERIT_BASED", "HEC_NOMINATED"],
+    applyUrl: "https://www.hec.gov.pk/english/scholarshipsgrants/lao/cwgs/",
+    sourceUrl:
+      "https://www.hec.gov.pk/english/scholarshipsgrants/lao/cwgs/Pages/Eligibility-Criteria.aspx",
+    isPaid: true,
+    stipendMin: null,
+    isNeedBased: false,
+    isMeritBased: true,
+    tuitionCoverage: "FULL",
+    tuitionCoveragePercent: null,
+    coversLiving: true,
+    coversTravel: true,
+    deadline: "2026-10-20T16:00:00+05:00",
+    verificationStatus: "VERIFIED",
+    lastVerifiedAt: "2026-10-05",
+    criteria: [
+      {
+        code: "NATIONALITY",
+        operator: "IN",
+        value: { in: ["PK"] },
+        label: "Pakistani/AJ&K national and permanent resident",
+      },
+      {
+        code: "DEGREE_LEVEL",
+        operator: "IN",
+        value: { in: ["MASTERS", "PHD"] },
+        label: "Master's or PhD applicants",
+      },
+      {
+        code: "MIN_HAT",
+        operator: "GTE",
+        value: { gte: 60, scale: 100 },
+        label: "HAT test score ≥ 60/100",
+      },
+    ],
+    documents: [
+      { docCode: "HAT_RESULT", label: "HAT test result (≥ 60)", required: true },
+      { docCode: "DEGREE", label: "Degree certificate (first division)", required: true },
+      { docCode: "TRANSCRIPT", label: "Transcript", required: true },
+      { docCode: "CNIC", label: "CNIC", required: true },
+      { docCode: "REFERENCE", label: "References", required: false },
+    ],
+  },
+  {
+    slug: "hec-overseas-phase3-batch4",
+    type: "SCHOLARSHIP",
+    title: "HEC — Overseas Scholarships for MS/MPhil & PhD (Phase-III, Batch-IV)",
+    provider: "Higher Education Commission of Pakistan",
+    countryCode: null,
+    description:
+      "HEC's fully funded overseas programme for MS/MPhil and PhD study at the top 200 QS/THE ranked universities, covering tuition, living allowance and airfare. Open to Pakistani/AJ&K nationals with a qualifying HAT score. The 2026 batch has closed.",
+    categories: ["FULLY_FUNDED", "MERIT_BASED", "HEC_NOMINATED"],
+    applyUrl: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/InternationalScholarships.aspx",
+    sourceUrl: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/InternationalScholarships.aspx",
+    isPaid: true,
+    stipendMin: null,
+    isNeedBased: false,
+    isMeritBased: true,
+    tuitionCoverage: "FULL",
+    tuitionCoveragePercent: null,
+    coversLiving: true,
+    coversTravel: true,
+    deadline: "2026-08-28T23:59:00+05:00",
+    verificationStatus: "VERIFIED",
+    lastVerifiedAt: "2026-10-05",
+    criteria: [
+      { code: "NATIONALITY", operator: "IN", value: { in: ["PK"] }, label: "Pakistani/AJ&K nationals" },
+      {
+        code: "DEGREE_LEVEL",
+        operator: "IN",
+        value: { in: ["MASTERS", "PHD"] },
+        label: "MS/MPhil or PhD applicants",
+      },
+      { code: "MIN_HAT", operator: "GTE", value: { gte: 60, scale: 100 }, label: "HAT test score ≥ 60" },
+    ],
+    documents: [
+      { docCode: "HAT_RESULT", label: "HAT test result", required: true },
+      { docCode: "DEGREE", label: "Degree certificate", required: true },
+      { docCode: "TRANSCRIPT", label: "Transcript", required: true },
+      { docCode: "CNIC", label: "CNIC", required: true },
+    ],
+  },
+  {
+    slug: "hec-need-based-domestic",
+    type: "SCHOLARSHIP",
+    title: "HEC Need-Based Scholarship (domestic)",
+    provider: "Higher Education Commission of Pakistan — via your university",
+    countryCode: "PK",
+    description:
+      "Financial assistance for students whose household income is low. Eligibility is set by your own university, but the HEC framework requires monthly family income of Rs 45,000 or less, and excludes self-finance students. Applications are usually handled by the university's financial aid office, which decides deadlines — check with them directly.",
+    categories: ["NEED_BASED", "DOMESTIC"],
+    applyUrl: "https://www.hec.gov.pk/",
+    sourceUrl: "https://www.hec.gov.pk/",
+    isPaid: true,
+    stipendMin: null,
+    isNeedBased: true,
+    isMeritBased: false,
+    tuitionCoverage: "PERCENT",
+    tuitionCoveragePercent: 50,
+    coversLiving: false,
+    coversTravel: false,
+    // Deadline is set per university, so it is deliberately not asserted here.
+    deadline: null,
+    verificationStatus: "VERIFIED",
+    lastVerifiedAt: "2026-10-05",
+    criteria: [
+      { code: "NATIONALITY", operator: "IN", value: { in: ["PK"] }, label: "Pakistani students" },
+      {
+        code: "MAX_HOUSEHOLD_INCOME",
+        operator: "LTE",
+        value: { lte: 45_000 },
+        label: "Monthly family income ≤ Rs 45,000",
+      },
+    ],
+    documents: [
+      { docCode: "CNIC", label: "CNIC", required: true },
+      { docCode: "UTILITY_BILL", label: "Utility bill", required: true },
+      { docCode: "RENT_AGREEMENT", label: "Rent agreement", required: false },
+      { docCode: "FEE_RECEIPT", label: "Fee receipt", required: true },
+      { docCode: "TRANSCRIPT", label: "Transcript", required: true },
+    ],
+  },
+  {
+    slug: "hec-heydar-aliyev-grant-azerbaijan",
+    type: "SCHOLARSHIP",
+    title: "Heydar Aliyev International Educational Grant (Azerbaijan)",
+    provider: "Higher Education Commission of Pakistan / Azerbaijan",
+    countryCode: "AZ",
+    description:
+      "Three fully funded slots (one bachelor's, one master's, one doctoral) awarded through HEC. Age limits apply and differ by degree level, so check the current call before applying. A HAT or USAT score obtained on or after the call date is required. The 2026 round has closed.",
+    categories: ["FULLY_FUNDED", "HEC_NOMINATED"],
+    applyUrl: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/InternationalScholarships.aspx",
+    sourceUrl: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/InternationalScholarships.aspx",
+    isPaid: true,
+    stipendMin: null,
+    isNeedBased: false,
+    isMeritBased: true,
+    tuitionCoverage: "FULL",
+    tuitionCoveragePercent: null,
+    coversLiving: true,
+    coversTravel: true,
+    deadline: "2026-03-20T23:59:00+05:00",
+    verificationStatus: "VERIFIED",
+    lastVerifiedAt: "2026-10-05",
+    criteria: [
+      { code: "NATIONALITY", operator: "IN", value: { in: ["PK"] }, label: "Pakistani/AJ&K nationals" },
+      {
+        code: "DEGREE_LEVEL",
+        operator: "IN",
+        value: { in: ["UNDERGRADUATE", "MASTERS", "PHD"] },
+        label: "Bachelor's, Master's or doctoral applicants",
+      },
+    ],
+    documents: [
+      { docCode: "HAT_RESULT", label: "HAT / USAT result", required: true },
+      { docCode: "DEGREE", label: "Degree certificate", required: true },
+      { docCode: "TRANSCRIPT", label: "Transcript", required: true },
+      { docCode: "PASSPORT", label: "Passport", required: true },
+    ],
+  },
+  {
+    slug: "hec-stipendium-hungaricum",
+    type: "SCHOLARSHIP",
+    title: "Stipendium Hungaricum Scholarship (via HEC)",
+    provider: "Hungarian Ministry of Foreign Affairs and Trade / HEC",
+    countryCode: "HU",
+    description:
+      "Hungarian government scholarship covering tuition and a monthly stipend. Open to Pakistani/AJ&K citizens with no upper age limit; applicants must be 18 on or before the published cut-off date. Recipients may be asked to serve in Pakistan after graduation. The current HEC document deadline has passed.",
+    categories: ["FULLY_FUNDED", "MERIT_BASED"],
+    applyUrl: "https://stipendiumhungaricum.hu/",
+    sourceUrl: "https://www.hec.gov.pk/english/scholarshipsgrants/Pages/InternationalScholarships.aspx",
+    isPaid: true,
+    stipendMin: null,
+    isNeedBased: false,
+    isMeritBased: true,
+    tuitionCoverage: "FULL",
+    tuitionCoveragePercent: null,
+    coversLiving: true,
+    coversTravel: false,
+    deadline: "2026-01-15T23:59:00+05:00",
+    verificationStatus: "VERIFIED",
+    lastVerifiedAt: "2026-10-05",
+    criteria: [
+      { code: "NATIONALITY", operator: "IN", value: { in: ["PK"] }, label: "Pakistani/AJ&K citizens" },
+      { code: "MIN_AGE", operator: "GTE", value: { gte: 18 }, label: "Aged 18 by the published cut-off" },
+    ],
+    documents: [
+      { docCode: "PASSPORT", label: "Passport", required: true },
+      { docCode: "TRANSCRIPT", label: "Transcript", required: true },
+      { docCode: "LANGUAGE_CERT", label: "Language certificate", required: false },
+    ],
+  },
+];
 
 export const PK_OPPORTUNITIES: SeedOpportunity[] = [
   {
@@ -462,6 +706,8 @@ export type SeedStudent = {
   email: string;
   name: string;
   ageAtSignup: number;
+  gender: "FEMALE" | "MALE" | "OTHER" | "UNDISCLOSED";
+  hatScore: number | null;
   city: string;
   university: string;
   degree: string;
@@ -480,6 +726,21 @@ export type SeedStudent = {
   accommodationAnnual: number | null;
   existingAidCoverage: string;
   assistanceRequired: boolean;
+  personalisation: {
+    primaryGoal: string;
+    secondaryGoals: string[];
+    stressTriggers: string[];
+    supportPreference: string;
+    availableHoursPerWeek: number;
+    studyStyle: string;
+    commuteMinutes: number;
+    workCommitment: string;
+    caresForOthers: boolean;
+    tonePreference: string;
+  };
+  incomeSources: { label: string; monthly: number; stable: boolean }[];
+  budgetExpenses: { code: string; label: string; monthly: number; essential: boolean }[];
+  termsPerYear: number;
 };
 
 export const PK_DEMO_STUDENTS: SeedStudent[] = [
@@ -487,6 +748,8 @@ export const PK_DEMO_STUDENTS: SeedStudent[] = [
     email: "ayesha@example.pk",
     name: "Ayesha Khan",
     ageAtSignup: 21,
+    gender: "FEMALE",
+    hatScore: null,
     city: "Lahore",
     university: "University of the Punjab",
     degree: "BS Software Engineering",
@@ -505,11 +768,39 @@ export const PK_DEMO_STUDENTS: SeedStudent[] = [
     accommodationAnnual: 96_000,
     existingAidCoverage: "NONE",
     assistanceRequired: true,
+    personalisation: {
+      primaryGoal: "FINANCE",
+      secondaryGoals: ["ACADEMIC"],
+      stressTriggers: ["MONEY", "EXAMS", "FAMILY"],
+      supportPreference: "PEER",
+      availableHoursPerWeek: 26,
+      studyStyle: "SPACED",
+      commuteMinutes: 75,
+      workCommitment: "PART_TIME",
+      caresForOthers: true,
+      tonePreference: "GENTLE",
+    },
+    incomeSources: [
+      { label: "Family support", monthly: 12_000, stable: true },
+      { label: "Weekend tutoring", monthly: 8_000, stable: false },
+    ],
+    budgetExpenses: [
+      { code: "FOOD", label: "Food & groceries", monthly: 14_000, essential: true },
+      { code: "TRANSPORT", label: "Transport & fuel", monthly: 5_000, essential: true },
+      { code: "ACCOMMODATION", label: "Shared rent", monthly: 8_000, essential: true },
+      { code: "PHONE_DATA", label: "Phone & internet", monthly: 2_500, essential: true },
+      { code: "STUDY_MATERIALS", label: "Books & study materials", monthly: 2_000, essential: false },
+      { code: "FAMILY_SUPPORT", label: "Support sent home", monthly: 4_000, essential: false },
+      { code: "SOCIAL", label: "Social & outings", monthly: 1_500, essential: false },
+      { code: "HEALTH", label: "Health & pharmacy", monthly: 1_000, essential: true },
+    ],
+    termsPerYear: 2,
   },
   {
     email: "bilal@example.pk",
     name: "Bilal Ahmed",
     ageAtSignup: 23,
+    gender: "MALE",
     city: "Karachi",
     university: "NED University of Engineering & Technology",
     degree: "BS Computer Science",
@@ -520,6 +811,7 @@ export const PK_DEMO_STUDENTS: SeedStudent[] = [
     graduationYear: 2026,
     documentsOnHand: ["TRANSCRIPT", "CNIC", "CV", "PASSPORT"],
     cgpa: 3.85,
+    hatScore: 72,
     incomeBandCode: "PK_B4",
     earners: 2,
     dependents: 2,
@@ -528,11 +820,39 @@ export const PK_DEMO_STUDENTS: SeedStudent[] = [
     accommodationAnnual: null,
     existingAidCoverage: "NONE",
     assistanceRequired: false,
+    personalisation: {
+      primaryGoal: "CAREER",
+      secondaryGoals: ["ACADEMIC"],
+      stressTriggers: ["EXAMS", "CAREER"],
+      supportPreference: "SELF_GUIDED",
+      availableHoursPerWeek: 34,
+      studyStyle: "INTENSIVE",
+      commuteMinutes: 35,
+      workCommitment: "PART_TIME",
+      caresForOthers: false,
+      tonePreference: "DETAILED",
+    },
+    incomeSources: [
+      { label: "Family support", monthly: 40_000, stable: true },
+      { label: "Lab assistantship", monthly: 15_000, stable: true },
+    ],
+    budgetExpenses: [
+      { code: "FOOD", label: "Food & canteen", monthly: 12_000, essential: true },
+      { code: "TRANSPORT", label: "Transport & fuel", monthly: 6_000, essential: true },
+      { code: "ACCOMMODATION", label: "Campus hostel", monthly: 5_000, essential: true },
+      { code: "PHONE_DATA", label: "Phone & internet", monthly: 2_500, essential: true },
+      { code: "STUDY_MATERIALS", label: "Books & software", monthly: 2_500, essential: false },
+      { code: "SOCIAL", label: "Social & outings", monthly: 3_000, essential: false },
+      { code: "HEALTH", label: "Health & pharmacy", monthly: 1_500, essential: true },
+    ],
+    termsPerYear: 2,
   },
   {
     email: "sana@example.pk",
     name: "Sana Malik",
     ageAtSignup: 26,
+    gender: "FEMALE",
+    hatScore: 65,
     city: "Islamabad",
     university: "Quaid-i-Azam University",
     degree: "MS Economics",
@@ -551,6 +871,33 @@ export const PK_DEMO_STUDENTS: SeedStudent[] = [
     accommodationAnnual: 60_000,
     existingAidCoverage: "PARTIAL",
     assistanceRequired: true,
+    personalisation: {
+      primaryGoal: "FINANCE",
+      secondaryGoals: ["WELLBEING", "CAREER"],
+      stressTriggers: ["MONEY", "FAMILY"],
+      supportPreference: "PROFESSIONAL",
+      availableHoursPerWeek: 20,
+      studyStyle: "STEADY",
+      commuteMinutes: 20,
+      workCommitment: "NONE",
+      caresForOthers: true,
+      tonePreference: "DIRECT",
+    },
+    incomeSources: [
+      { label: "Family support", monthly: 20_000, stable: true },
+      { label: "Freelance writing", monthly: 7_000, stable: false },
+    ],
+    budgetExpenses: [
+      { code: "FOOD", label: "Food & groceries", monthly: 13_000, essential: true },
+      { code: "TRANSPORT", label: "Transport", monthly: 4_000, essential: true },
+      { code: "ACCOMMODATION", label: "Campus hostel", monthly: 5_000, essential: true },
+      { code: "PHONE_DATA", label: "Phone & internet", monthly: 2_000, essential: true },
+      { code: "STUDY_MATERIALS", label: "Books & study materials", monthly: 2_500, essential: false },
+      { code: "FAMILY_SUPPORT", label: "Support sent home", monthly: 3_000, essential: false },
+      { code: "HEALTH", label: "Health & pharmacy", monthly: 1_500, essential: true },
+      { code: "OTHER", label: "Course retake fee buffer", monthly: 1_000, essential: false },
+    ],
+    termsPerYear: 2,
   },
 ];
 

@@ -2,42 +2,96 @@
 
 > **AI-Powered Student Wellbeing, Financial Support & Opportunity Recommendation Platform**
 
-Status: **Phase 1 vertical slice built and working** (see §0.1).
-Plan version: 0.2 · Date: 2026-10-05
+Status: **Phase 2 complete** — monochrome design, personalisation questionnaire, verified HEC programmes, financial planner, timezone-correct deadlines (see §0.1).
+Plan version: 0.3 · Date: 2026-10-05
 
 ---
 
 ## 0.1 Build status
 
-Scope of the first build session: **Pakistan launch, public data only.** What exists now:
+Scope: **Pakistan launch, public data only.** Phase 2 closed the four requests — monochrome, more personalisation questions, authentic scholarships, a student finance planner — and fixed a deadline-integrity bug found while doing it.
 
 | Plan item | Status |
 |---|---|
 | §3.3 Stack (Next 16.3.8 / React 19.2 / Prisma 7.10 stable / Tailwind 4 / Zod 4) | ✅ as specified |
-| §4.1 Financial Need Score + versioned `ScoringWeightSet` | ✅ 41 tests green |
+| §4.1 Financial Need Score + versioned `ScoringWeightSet` | ✅ |
 | §4.2 Concern classifier (tags + weighted lexicon, negation, intensifiers) | ✅ |
 | §4.3 Eligibility engine: hard filters → soft scoring → reasons → near-misses | ✅ |
-| §5 Data model (17 models) + migration | ✅ |
-| §7.1 Pages: dashboard, financial, opportunities, detail, check-in, support | ✅ 6 pages |
+| §4.5 Timezone-correct deadline engine (`src/domain/shared/dates.ts`) | ✅ new in Phase 2 |
+| §5 Data model (19 models) + migration `20261005130319_personalisation_and_finance` | ✅ applied |
+| §7.1 Pages (9 routes incl. `/onboarding`, `/finances`) | ✅ all return 200 |
 | §7.2 Check-in write path (server action) + `getMatchView` service | ✅ verified |
-| §9 Tests (unit + product invariants) | ✅ 41 tests, no framework dependency |
+| §7.4 Monochrome design system (`globals.css` + `components/ui.tsx`) | ✅ new in Phase 2 |
+| §7.5 Personalisation questionnaire, 5 steps, no documents demanded | ✅ new in Phase 2 |
+| §7.6 Financial planner (income → expenses → terms → buffer → levers) | ✅ new in Phase 2 |
+| Verified HEC programmes (5, from hec.gov.pk) | ✅ new in Phase 2 |
+| §9 Tests (unit + product invariants) | ✅ 144 tests, no framework dependency |
 | Auth (Better Auth) | ❌ not started — demo resolves `?s=0\|1\|2` |
-| Opportunity deadlines | ❌ deliberately `null` (see below) |
-| Verification workflow / admin CRUD | ❌ listings are all `UNVERIFIED` |
+| Verification workflow / admin CRUD | ❌ 14 seeded listings are still `UNVERIFIED` |
 | `MatchRun` / `ScholarshipMatch` persistence | ❌ tables exist, not written |
 | Applications, community, moderation, admin analytics, `eval/` | ❌ not started |
 
-Deviations from the plan, both recorded:
+Deviations from the plan, all recorded:
 
-1. **Vitest could not be installed** — `vitest@5.0.3` has a peer conflict with React 19 / Next 16. Tests run on `node:test` + `tsx` instead (`npm test`). Revisit if the conflict clears.
+1. **Vitest could not be installed** — `vitest@5.0.3` has a peer conflict with React 19 / Next 16. Tests run on `node:test` + `tsx` instead (`npm test`).
 2. **Test imports use explicit `.ts` extensions**, which required `allowImportingTsExtensions` in `tsconfig.json`. Harmless alongside `noEmit`.
+3. **`prisma migrate dev` has no `--skip-seed` in v7.** The seed is idempotent and re-runnable, so this cost nothing.
 
-Data honesty decisions made during the build, not in the original plan:
+### Phase 2 data honesty decisions
 
-- **No application deadlines were invented.** All seeded deadlines are `null` and the UI says so explicitly. §11/R1 governs.
-- **Eligibility criteria are indicative, not verified.** Every listing is seeded `UNVERIFIED`, which demotes it via `freshnessFactor` (0.75) and forces an `UNVERIFIED_SOURCE` badge in the UI.
-- **Crisis numbers are unverified placeholders**, labelled as such on `/support`. A human must confirm them before launch (§6.3).
-- **Gender is not in the profile yet**, so a `GENDER` criterion is assumed-eligible and reported as "assumed — add your details". Known false-positive path; fix by adding gender to `StudentProfile`.
+**Deadlines are stored as instants with an explicit offset, and resolved in Asia/Karachi.** This replaced an end-of-day-UTC convention that was quietly wrong twice over:
+
+- HEC publishes "20 Oct 2026, 4:00 PM". Storing that as end-of-day handed every student eight hours that do not exist.
+- `toISOString().slice(0, 10)` rendered in UTC, so a student in Karachi could be shown the wrong calendar day.
+
+`pkrInstant()` is the only way a Pakistan wall-clock time becomes a UTC instant; `deadlineInstant()` is the only way a stored value becomes an instant again. A bare `YYYY-MM-DD` means "no time was published" and resolves to 23:59 PKT — never `new Date("…")`, which means 00:00 **UTC** and closes a date five hours early. When no time was published, the UI says *"no closing time published"* rather than presenting our own fallback as fact.
+
+**"Closes today" is never a disqualifier.** An earlier iteration hard-filtered anything closing today, which reports "not eligible" to a student who can still apply in four hours — a false negative, the one class of error the engine must not emit. Urgency is carried by the `DEADLINE_NEAR` reason; only a genuinely past instant closes an opportunity. Regression-tested in `tests/unit/matching.test.ts`.
+
+**Five HEC programmes are VERIFIED** from hec.gov.pk, criteria and deadlines alike, each with `sourceUrl` and `lastVerifiedAt`. The remaining 14 listings stay `UNVERIFIED`, are demoted by `freshnessFactor` (0.75), and carry a dotted "⚠" badge. OGDCL's need-based scholarship was **deliberately not seeded**: the published detail was not specific enough to encode as a rule.
+
+**14 unverified listings remain, and that is the honest state.** OGDCL is the notable omission.
+
+**Crisis numbers are still unverified placeholders**, labelled as such on `/support`. A human must confirm them before launch (§6.3). This is the single largest remaining blocker to calling the product safe.
+
+**Personalisation cannot change eligibility.** It reorders, re-tunes tone and adjusts depth. A criterion outcome is identical with and without a profile — enforced structurally, since personalisation never reaches the engine.
+
+**Registration asks no financial documents.** `/onboarding` takes income, expenses and priorities, and says outright that nothing is verified at sign-up.
+
+### Phase 2 bugs caught by tests
+
+Writing the tests was not a formality — each of these was live before the test existed:
+
+| Bug | Consequence if shipped |
+|---|---|
+| `todayISO()` used UTC | Whole app reported **yesterday** for the first 5 hours of every Pakistani evening, including whether a deadline had closed |
+| Deadlines floored an instant difference | An HEC portal closing 16:00 read as "0 days" from midnight and was filtered out as closed |
+| "Closes today" hard-filtered | **False negative**: "not eligible" shown for an application still open for hours |
+| `new Date("2026-10-20")` on a bare date | 00:00 UTC, so a date-only deadline closed at **05:00 PKT** instead of 23:59 |
+| `goalLabels` typo in the planner | Priority labels blank on the dashboard |
+| Funding target asserted on a surplus | Told a student with money to spare that they needed a scholarship |
+| `MIN_HAT` gaps not classified as near-misses | HAT failures read as dead ends rather than near misses |
+| `UNDISCLOSED` gender treated as a real value | Students who skipped the question were wrongly **disqualified** by gender criteria |
+| `Rs 45000` not grouped | Displayed unformatted next to every grouped figure |
+| Planner said *"Trim Social & outings by a third"* | **The app told a student what to give up**, breaking a product rule it claims to hold |
+| `SOCIAL_TRIM` and `DISC_TRIM` both counted social | The same rupees counted twice, so `leversCloseGap` over-promised |
+| `leversCloseGap` compared against `Math.abs(surplus)` | In surplus it asked whether spending changes could remove unneeded money, rendering as a warning where none was needed |
+| `round1000(target / 12) \|\| 5_000` for the bursary lever | Invented a Rs 5,000/month aid figure for a student with **no shortfall** |
+| Levers were not sorted despite "ranked by real monthly rupees" | The section title was a claim the code did not honour |
+| `dev.db` was tracked in git | `.gitignore` covered `prisma/*.db`, but `file:./dev.db` resolves from the **project root** — the live database was committed |
+
+### Monochrome status vocabulary
+
+No hue anywhere. State is never carried by colour alone, because colour-blind students and monochrome printing both make colour-only signalling unsafe in an education context:
+
+| Meaning | Fill | Border | Glyph |
+|---|---|---|---|
+| affirmative | solid black | 1px black | ✓ |
+| caution | white | **dashed** | ⚠ |
+| negative | white | **2px** black | ✕ |
+| provisional | **hatched** | — | ⚠ |
+
+`.mm-*` classes live in `@layer components` so a Tailwind utility on the same element wins. Outside the layer, `.mm-choice { align-items: center }` silently beat `items-start` on every long option label.
 
 ---
 

@@ -14,13 +14,21 @@ import {
   type StudentMatchInput,
 } from "@/domain/matching/engine";
 import { computeFinancialNeed, type FinancialNeedResult } from "@/domain/financial/score";
+import { todayPK, localDate } from "@/domain/shared/dates";
 import {
   PK_INCOME_BANDS_MONTHLY,
   PK_MATCH_POLICY,
   PK_WEIGHT_SET_V1,
 } from "@/config/pakistan";
 
-export const todayISO = (): string => new Date().toISOString().slice(0, 10);
+/**
+ * Today in Pakistan, as `YYYY-MM-DD`.
+ *
+ * Deliberately not `new Date().toISOString().slice(0, 10)`: UTC is up to five
+ * hours behind PKT, so for the first five hours of every Pakistani evening the
+ * whole app would report yesterday — including whether a deadline had closed.
+ */
+export const todayISO = (): string => todayPK();
 
 const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
   if (!value) return fallback;
@@ -31,8 +39,22 @@ const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
   }
 };
 
+/**
+ * Deadlines cross into the domain as full instants, not as UTC dates.
+ *
+ * Truncating here would throw away the closing hour — HEC shuts at 16:00 PKT,
+ * and the engine needs that to say "closes in four hours" rather than showing
+ * a bare date the student has to interpret themselves.
+ */
+const toInstantISO = (value: Date | null): string | null =>
+  value ? value.toISOString() : null;
+
+/**
+ * A `lastVerifiedAt` is the day an administrator looked at the page, not a
+ * closing moment, so it stays a plain calendar date.
+ */
 const toDateOnly = (value: Date | null): string | null =>
-  value ? value.toISOString().slice(0, 10) : null;
+  value ? localDate(value) : null;
 
 export interface DemoStudentRef {
   email: string;
@@ -61,6 +83,7 @@ interface StudentRow {
   name: string;
   studentProfile: {
     ageAtSignup: number | null;
+    gender: string | null;
     university: string | null;
     degree: string | null;
     degreeLevel: string | null;
@@ -70,7 +93,7 @@ interface StudentRow {
     documentsOnHand: string | null;
     profileComplete: boolean;
   } | null;
-  academicProfile: { cgpa: number | null; cgpaScale: number | null } | null;
+  academicProfile: { cgpa: number | null; cgpaScale: number | null; hatScore: number | null } | null;
   financialProfile: {
     incomeBandCode: string | null;
     earners: number | null;
@@ -83,12 +106,52 @@ interface StudentRow {
     needScore: number | null;
     needBand: string | null;
   } | null;
+  personalisationProfile: {
+    primaryGoal: string;
+    secondaryGoals: string | null;
+    stressTriggers: string | null;
+    supportPreference: string | null;
+    availableHoursPerWeek: number | null;
+    studyStyle: string | null;
+    commuteMinutes: number | null;
+    workCommitment: string | null;
+    caresForOthers: boolean;
+    preferredLanguage: string;
+    tonePreference: string;
+    completedAt: Date | null;
+  } | null;
+  budgetPlan: {
+    incomeSources: string;
+    expenses: string;
+    annualTuition: number;
+    termsPerYear: number;
+    bufferTargetMonths: number;
+  } | null;
+}
+
+/**
+ * Midpoint of the declared income band, in PKR/month.
+ *
+ * Used for criteria that publish a hard rupee ceiling (HEC need-based
+ * scholarships cap monthly family income at Rs 45,000). The midpoint is an
+ * estimate, so this resolves to the *higher* end of the band: if even the top
+ * of the band is under the ceiling the student is safely inside it, and if the
+ * band straddles the ceiling the student is shown it and decides. Never uses
+ * the band midpoint to declare someone ineligible.
+ */
+export function bandCeilingIncome(bandCode: string | null | undefined): number | null {
+  if (!bandCode) return null;
+  const band = PK_INCOME_BANDS_MONTHLY.find((entry) => entry.code === bandCode);
+  if (!band) return null;
+  return band.max ?? band.min;
 }
 
 const studentInclude = {
   studentProfile: true,
   academicProfile: true,
   financialProfile: true,
+  personalisationProfile: true,
+  budgetPlan: true,
 } as const;
 
 async function loadStudent(email: string): Promise<StudentRow | null> {
@@ -102,6 +165,9 @@ export function toMatchInput(student: StudentRow): StudentMatchInput {
     nationality: "PK",
     cgpa: student.academicProfile?.cgpa ?? null,
     cgpaScale: student.academicProfile?.cgpaScale ?? 4.0,
+    hatScore: student.academicProfile?.hatScore ?? null,
+    gender: student.studentProfile?.gender ?? null,
+    monthlyHouseholdIncome: bandCeilingIncome(student.financialProfile?.incomeBandCode),
     degreeLevel: student.studentProfile?.degreeLevel ?? null,
     field: student.studentProfile?.field ?? null,
     enrollmentStatus: student.studentProfile?.enrollmentStatus ?? null,
@@ -168,7 +234,7 @@ function toEngineOpportunity(row: OpportunityRow): OpportunityForMatching {
     coversTravel: row.scholarship?.coversTravel ?? false,
     stipendAmount: row.scholarship?.stipendAmount ?? row.stipendMin,
     requiredDocuments: row.documents.filter((d) => d.required).map((d) => d.docCode),
-    deadline: toDateOnly(row.deadline),
+    deadline: toInstantISO(row.deadline),
     verificationStatus: row.verificationStatus as OpportunityForMatching["verificationStatus"],
     lastVerifiedAt: toDateOnly(row.lastVerifiedAt),
   };
@@ -219,6 +285,9 @@ export async function getMatchView(email: string): Promise<MatchView | null> {
     toMatchInput(student),
     todayISO(),
     PK_MATCH_POLICY,
+    // The real clock, so "closes in 40 minutes" and "already closed" are
+    // distinguishable on the final day of a deadline.
+    new Date(),
   );
 
   const opportunities = new Map(rows.map((row) => [row.id, row]));
@@ -308,9 +377,28 @@ export async function getWellbeing(email: string): Promise<WellbeingSnapshot> {
   };
 }
 
-export async function listSupportServices(): Promise<
-  { id: string; type: string; name: string; org: string; phone: string | null; website: string | null; openingHours: string | null; isEmergency: boolean; verificationStatus: string }[]
-> {
+/**
+ * Support services are deliberately returned as-is, verification state
+ * included. The page is responsible for showing that state to the student: a
+ * crisis number nobody has confirmed is worse than no number at all, so the UI
+ * labels every entry rather than presenting it as fact.
+ */
+export type SupportServiceRow = {
+  id: string;
+  type: string;
+  name: string;
+  org: string;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  openingHours: string | null;
+  languages: string | null;
+  isEmergency: boolean;
+  verificationStatus: string;
+  lastVerifiedAt: Date | null;
+};
+
+export async function listSupportServices(): Promise<SupportServiceRow[]> {
   return prisma.supportService.findMany({
     orderBy: [{ isEmergency: "desc" }, { name: "asc" }],
   });

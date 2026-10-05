@@ -14,9 +14,16 @@
  */
 
 import { clamp01, round1 } from "../shared/math";
+import {
+  daysUntil,
+  deadlineState,
+  formatDeadline,
+  pkrInstant,
+} from "../shared/dates";
 
 export type CriterionCode =
   | "MIN_CGPA"
+  | "MIN_HAT"
   | "MAX_AGE"
   | "MIN_AGE"
   | "COUNTRY"
@@ -24,6 +31,7 @@ export type CriterionCode =
   | "DEGREE_LEVEL"
   | "FIELD"
   | "INCOME_NEED"
+  | "MAX_HOUSEHOLD_INCOME"
   | "ENROLLMENT_STATUS"
   | "GENDER"
   | "NO_PRIOR_SCHOLARSHIP";
@@ -55,6 +63,9 @@ export interface StudentMatchInput {
   nationality?: string | null;
   cgpa?: number | null;
   cgpaScale?: number | null;
+  /// HAT test score out of 100. Gates nearly every HEC foreign scholarship
+  /// nomination in Pakistan (minimum 60).
+  hatScore?: number | null;
   degreeLevel?: string | null;
   field?: string | null;
   gender?: string | null;
@@ -65,6 +76,12 @@ export interface StudentMatchInput {
   financialNeedBand?: string | null;
   /** Annual tuition in local currency — used to judge coverage value. */
   annualTuition?: number | null;
+  /**
+   * Resolved monthly household income in PKR, from the student's income band
+   * midpoint. Needed for programmes that publish a hard rupee ceiling
+   * (HEC need-based scholarships cap monthly family income at Rs 45,000).
+   */
+  monthlyHouseholdIncome?: number | null;
   documentsOnHand?: string[];
   holdsPriorScholarship?: boolean | null;
 }
@@ -112,7 +129,9 @@ export interface Disqualifier {
 
 export type ReasonCode =
   | "CGPA_ABOVE_MIN"
+  | "HAT_SCORE_MET"
   | "NEED_CRITERION_MET"
+  | "INCOME_WITHIN_LIMIT"
   | "FIELD_ELIGIBLE"
   | "AGE_ELIGIBLE"
   | "COVERAGE_FULL_FEE"
@@ -187,13 +206,14 @@ const asStringList = (value: unknown): string[] =>
 
 const DAY_MS = MS_PER_DAY;
 
-/** Whole days from `today` to `deadline` (negative = closed). */
-export function daysToDeadline(deadline: string | null, today: string): number | null {
-  if (!deadline) return null;
-  const deadlineMs = Date.parse(deadline);
-  const todayMs = Date.parse(today);
-  if (Number.isNaN(deadlineMs) || Number.isNaN(todayMs)) return null;
-  return Math.floor((deadlineMs - todayMs) / DAY_MS);
+/**
+ * Turns the `YYYY-MM-DD` "today" the engine is driven with back into an instant
+ * so `deadlineState` has something to compare against. Midday in Pakistan is
+ * used rather than midnight: at 00:00 a deadline closing at 16:00 the same day
+ * would read as still open for a further sixteen hours of nothing.
+ */
+function todayAsInstant(today: string): Date {
+  return pkrInstant(today, 12, 0) ?? new Date();
 }
 
 export function freshnessFactor(
@@ -234,6 +254,7 @@ function daysBetween(a: string | null, b: string): number | null {
 
 const CRITERION_LABELS: Record<CriterionCode, string> = {
   MIN_CGPA: "Minimum academic result",
+  MIN_HAT: "HAT test score",
   MAX_AGE: "Maximum age",
   MIN_AGE: "Minimum age",
   COUNTRY: "Country of residence",
@@ -241,6 +262,7 @@ const CRITERION_LABELS: Record<CriterionCode, string> = {
   DEGREE_LEVEL: "Degree level",
   FIELD: "Field of study",
   INCOME_NEED: "Financial-need requirement",
+  MAX_HOUSEHOLD_INCOME: "Maximum household income",
   ENROLLMENT_STATUS: "Enrolment status",
   GENDER: "Gender eligibility",
   NO_PRIOR_SCHOLARSHIP: "Prior scholarship",
@@ -265,6 +287,13 @@ const normaliseField = (value: string): string => value.trim().toLowerCase();
  */
 export const formatNumber = (value: number): string =>
   String(Math.round(value * 100) / 100);
+
+/**
+ * Rupee amounts in criteria text are grouped for legibility: "Rs 45,000"
+ * reads as a real number at a glance, "Rs 45000" reads as a typo.
+ */
+export const formatMoney = (value: number): string =>
+  String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 /** Near-miss gaps are compared in normalised space, so keep 3dp of precision. */
 const round3 = (value: number): number => Math.round(value * 1000) / 1000;
@@ -298,6 +327,27 @@ export function evaluateCriterion(
               humanText: `Requires a result of ${formatNumber(gte)} or above on a ${formatNumber(scale)} scale — your profile shows ${formatNumber(student.cgpa)} on ${formatNumber(scale)}.`,
               // Normalised gap decides near-miss, not raw CGPA points.
               nearMissGap: round3(threshold - normalised),
+            },
+          };
+    }
+
+    case "MIN_HAT": {
+      const gte = asNumber(value.gte);
+      const scale = asNumber(value.scale) ?? 100;
+      if (gte === null || student.hatScore == null || !scale) {
+        return { passed: true, evaluable: false };
+      }
+      const passed = operator === "GTE" ? student.hatScore >= gte : student.hatScore <= gte;
+      return passed
+        ? { passed: true, evaluable: true, passedReason: "HAT_SCORE_MET" }
+        : {
+            passed: false,
+            evaluable: true,
+            disqualifier: {
+              code,
+              label,
+              humanText: `Requires a HAT test score of at least ${formatNumber(gte)} out of ${formatNumber(scale)} — add yours if you have taken the test. A re-sit closes this gap, so it is worth treating as closable.`,
+              nearMissGap: round3((gte - student.hatScore) / scale),
             },
           };
     }
@@ -423,6 +473,27 @@ export function evaluateCriterion(
           };
     }
 
+    case "MAX_HOUSEHOLD_INCOME": {
+      const lte = asNumber(value.lte);
+      if (lte === null || student.monthlyHouseholdIncome == null) {
+        return { passed: true, evaluable: false };
+      }
+      const passed = student.monthlyHouseholdIncome <= lte;
+      return passed
+        ? { passed: true, evaluable: true, passedReason: "INCOME_WITHIN_LIMIT" }
+        : {
+            passed: false,
+            evaluable: true,
+            disqualifier: {
+              code,
+              label,
+              humanText: `Limited to households earning Rs ${formatMoney(lte)} or less per month — your income band sits above that.`,
+              // Not closable by effort: the income band is a fact, not a target.
+              nearMissGap: undefined,
+            },
+          };
+    }
+
     case "ENROLLMENT_STATUS": {
       const list = asStringList(value.in);
       if (list.length === 0 || student.enrollmentStatus == null) {
@@ -446,8 +517,15 @@ export function evaluateCriterion(
 
     case "GENDER": {
       const expected = typeof value.eq === "string" ? value.eq : null;
-      if (!expected || student.gender == null) return { passed: true, evaluable: false };
-      const passed = student.gender.toUpperCase() === expected.toUpperCase();
+      // "UNDISCLOSED" is an absent answer, not an answer. Treating it as a real
+      // value would tell a student who declined to state their gender that they
+      // fail a women-only award they may well be eligible for.
+      const known =
+        typeof student.gender === "string" &&
+        student.gender.length > 0 &&
+        student.gender.toUpperCase() !== "UNDISCLOSED";
+      if (!expected || !known) return { passed: true, evaluable: false };
+      const passed = String(student.gender).toUpperCase() === expected.toUpperCase();
       return passed
         ? { passed: true, evaluable: true }
         : {
@@ -636,6 +714,10 @@ function isNearMiss(disqualifiers: Disqualifier[]): boolean {
   switch (disqualifiers[0].code) {
     case "MIN_CGPA":
       return gap <= 0.08; // ~8% of the scale away
+    case "MIN_HAT":
+      // Normalised to a 100-point scale, so 0.08 ≈ 8 HAT points. A re-sit is
+      // a realistic route to closing that, so it is shown as closable.
+      return gap <= 0.08;
     case "MAX_AGE":
     case "MIN_AGE":
       return gap <= 3;
@@ -651,6 +733,12 @@ export function matchOpportunity(
   student: StudentMatchInput,
   today: string,
   policy: MatchPolicy = DEFAULT_POLICY,
+  /**
+   * Real clock, used only to tell "closes in four hours" from "already closed"
+   * on the final day. Omit it and the engine assumes midday in Pakistan, which
+   * keeps the function deterministic for tests.
+   */
+  now: Date = todayAsInstant(today),
 ): MatchResult {
   const reasons: ReasonCode[] = [];
   const disqualifiers: Disqualifier[] = [];
@@ -665,12 +753,23 @@ export function matchOpportunity(
     });
   }
 
-  const days = daysToDeadline(opportunity.deadline ?? null, today);
-  if (days !== null && days < 0) {
+  // Deadline maths runs in Asia/Karachi — see src/domain/shared/dates.ts. A
+  // deadline is a wall-clock moment in the awarding body's country, and HEC
+  // closes at 16:00 PKT, so truncating in UTC shows the wrong day.
+  const deadline = opportunity.deadline ?? null;
+  const state = deadlineState(deadline, now);
+  const days = daysUntil(deadline, today);
+
+  // Only a genuinely past instant closes an opportunity. A deadline that is
+  // still ahead of the clock is NOT a disqualifier even when it closes today:
+  // the student can still apply, and reporting "not eligible" for something
+  // they can submit in four hours is exactly the false negative this engine is
+  // built to avoid. Urgency is carried by the DEADLINE_NEAR reason instead.
+  if (state.status === "CLOSED") {
     disqualifiers.push({
       code: "DEADLINE_CLOSED",
       label: "Applications closed",
-      humanText: `Applications closed on ${opportunity.deadline}.`,
+      humanText: `Applications closed ${formatDeadline(deadline)}.`,
     });
   }
 
@@ -743,8 +842,11 @@ export function matchOpportunity(
   if ((opportunity.stipendAmount ?? 0) > 0 && !reasons.includes("STIPEND_INCLUDED")) {
     reasons.push("STIPEND_INCLUDED");
   }
-  if (days !== null && days <= 30 && days >= 0 && !reasons.includes("DEADLINE_NEAR")) {
-    reasons.push("DEADLINE_NEAR");
+  if (
+    state.status === "CLOSING_TODAY" ||
+    (days !== null && days > 0 && days <= 30)
+  ) {
+    if (!reasons.includes("DEADLINE_NEAR")) reasons.push("DEADLINE_NEAR");
   }
   const requiredDocs = opportunity.requiredDocuments ?? [];
   if (
@@ -778,9 +880,10 @@ export function matchOpportunities(
   student: StudentMatchInput,
   today: string,
   policy: MatchPolicy = DEFAULT_POLICY,
+  now: Date = todayAsInstant(today),
 ): MatchSummary {
   const results = opportunities.map((opportunity) =>
-    matchOpportunity(opportunity, student, today, policy),
+    matchOpportunity(opportunity, student, today, policy, now),
   );
   const eligible = results
     .filter((result) => result.eligible)

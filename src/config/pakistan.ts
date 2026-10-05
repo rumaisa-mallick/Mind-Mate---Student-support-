@@ -64,6 +64,16 @@ export const PK = {
   defaultLocale: "en",
   /** Approximate PKR per USD, used only to display foreign stipend amounts. */
   usdToPkr: 280,
+  /**
+   * Every deadline is a wall-clock moment in Pakistan, not in UTC.
+   *
+   * HEC closes its portals at 16:00 PKT, which is 11:00 UTC. If deadlines are
+   * rendered or compared in UTC a student in Lahore is shown the wrong day for
+   * roughly a third of them, and the day before a close they get 8 hours they
+   * do not have. All deadline maths runs in this zone.
+   */
+  timeZone: "Asia/Karachi",
+  timeZoneLabel: "PKT",
 } as const;
 
 export const PK_INCOME_BANDS_MONTHLY: IncomeBand[] = [

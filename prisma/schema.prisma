@@ -35,6 +35,8 @@ model User {
   studentProfile      StudentProfile?
   academicProfile     AcademicProfile?
   financialProfile    FinancialProfile?
+  personalisationProfile PersonalisationProfile?
+  budgetPlan          BudgetPlan?
   wellbeingCheckins   WellbeingCheckin[]
   matchRuns           MatchRun[]
   applications        Application[]
@@ -78,6 +80,9 @@ model StudentProfile {
   graduationYear  Int?
   /// Age at signup — denormalised for matching; DOB is never stored.
   ageAtSignup     Int?
+  /// FEMALE | MALE | OTHER | UNDISCLOSED. Needed because a large share of
+  /// Pakistani and international scholarships are gender-restricted.
+  gender          String?
   /// JSON string[]: docCodes the student already holds
   documentsOnHand String?
   profileComplete Boolean   @default(false)
@@ -95,6 +100,57 @@ model AcademicProfile {
   cgpaScale Float   @default(4.0)
   field    String?
   qualification String?
+  /// HAT test score out of 100. Most HEC foreign scholarship nominations are
+  /// gated on HAT >= 60, so it is a first-class eligibility input (PK-specific).
+  hatScore Float?
+  hatTestDate DateTime?
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Answers to the onboarding questionnaire. Drives ordering, tone and depth
+/// ONLY — never eligibility. See src/domain/personalisation/profile.ts.
+model PersonalisationProfile {
+  id        String  @id @default(cuid())
+  userId    String  @unique
+  /// FINANCE | ACADEMIC | CAREER | WELLBEING
+  primaryGoal     String
+  /// JSON PrimaryGoal[]
+  secondaryGoals  String?
+  /// JSON string[] (MONEY, EXAMS, FAMILY, …)
+  stressTriggers  String?
+  /// SELF_GUIDED | PEER | PROFESSIONAL
+  supportPreference String?
+  availableHoursPerWeek Int?
+  /// INTENSIVE | STEADY | SPACED
+  studyStyle      String?
+  commuteMinutes  Int?
+  /// NONE | PART_TIME | FULL_TIME
+  workCommitment  String?
+  caresForOthers  Boolean @default(false)
+  preferredLanguage String @default("en")
+  /// DIRECT | GENTLE | DETAILED
+  tonePreference  String  @default("DIRECT")
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// The student's own monthly numbers. No advice is stored — the plan is always
+/// recomputed from these inputs by the pure planner.
+model BudgetPlan {
+  id     String @id @default(cuid())
+  userId String @unique
+  /// JSON IncomeSourceInput[]
+  incomeSources String
+  /// JSON ExpenseInput[]
+  expenses      String
+  annualTuition Float  @default(0)
+  termsPerYear  Int    @default(2)
+  bufferTargetMonths Int @default(3)
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

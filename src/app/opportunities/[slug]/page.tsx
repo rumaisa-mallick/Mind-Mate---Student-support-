@@ -1,28 +1,35 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+
+import { NO_STUDENTS, resolveDemoStudent, withStudent } from "@/server/services/demo";
 import {
   getMatchView,
   getOpportunityBySlug,
-  listDemoStudents,
-  todayISO,
+  toMatchInput,
 } from "@/server/services/matching.service";
-import { evaluateCriterion, formatNumber } from "@/domain/matching/engine";
-import { toMatchInput } from "@/server/services/matching.service";
+import { evaluateCriterion } from "@/domain/matching/engine";
+import { DeadlineBadge, DeadlineSentence } from "@/components/deadline";
+import { formatDeadlineDay, todayPK } from "@/domain/shared/dates";
+import { Badge, Bar, ButtonLink, Callout, Card, Empty, PageHeader, Section, pkr } from "@/components/ui";
 
 const REASON_LABELS: Record<string, string> = {
   CGPA_ABOVE_MIN: "Your academic result clears the minimum",
+  HAT_SCORE_MET: "Your HAT score clears the minimum",
+  INCOME_WITHIN_LIMIT: "You are within the published income limit",
   NEED_CRITERION_MET: "Your financial profile meets the need criterion",
   FIELD_ELIGIBLE: "Your field of study is eligible",
   AGE_ELIGIBLE: "You are within the age range",
   COVERAGE_FULL_FEE: "Covers full tuition",
   STIPEND_INCLUDED: "Includes a living allowance",
   DEADLINE_NEAR: "Deadline is approaching",
-  DOCUMENTS_READY: "You already have the documents",
+  DOCUMENTS_READY: "You already hold the documents",
   MERIT_BASED: "Merit-based award",
   NEED_BASED: "Need-based award",
-  UNVERIFIED_SOURCE: "Listing not yet verified by an administrator",
-  STALE_DATA: "This listing may be out of date",
+  UNVERIFIED_SOURCE: "Listing not yet checked by an administrator",
+  STALE_DATA: "Listing may be out of date",
 };
+
+const CAUTION_REASONS = new Set(["UNVERIFIED_SOURCE", "STALE_DATA"]);
 
 const COMPONENT_LABELS: Record<string, string> = {
   NEED_FIT: "Financial need fit",
@@ -33,6 +40,46 @@ const COMPONENT_LABELS: Record<string, string> = {
   EFFORT: "Application effort",
 };
 
+const TYPE_LABELS: Record<string, string> = {
+  SCHOLARSHIP: "Scholarship",
+  INTERNSHIP: "Internship",
+  COMPETITION: "Competition",
+  COURSE: "Course",
+  FELLOWSHIP: "Fellowship",
+  EXCHANGE: "Exchange",
+};
+
+const parseList = (value: string | null): string[] => {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
+const parseObject = (value: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
+
+/** Criteria values are JSON; render them as a readable phrase, not raw JSON. */
+function criterionValue(value: Record<string, unknown>): string {
+  if (typeof value.gte === "number") {
+    return `${value.gte}${typeof value.scale === "number" ? ` / ${value.scale}` : " or above"}`;
+  }
+  if (typeof value.lte === "number") return `${value.lte} or below`;
+  if (typeof value.eq === "string") return value.eq.toLowerCase().replaceAll("_", " ");
+  if (Array.isArray(value.in)) return value.in.join(", ");
+  if (typeof value.eq === "number") return String(value.eq);
+  return "see the official page";
+}
+
 export default async function OpportunityDetailPage({
   params,
   searchParams,
@@ -41,212 +88,287 @@ export default async function OpportunityDetailPage({
   searchParams: Promise<{ s?: string }>;
 }) {
   const { slug } = await params;
-  const { s } = await searchParams;
+  const { index, current } = await resolveDemoStudent(await searchParams);
 
   const row = await getOpportunityBySlug(slug);
   if (!row) notFound();
+  if (!current) return <Empty>{NO_STUDENTS}</Empty>;
 
-  const students = await listDemoStudents();
-  const index = Math.min(Math.max(Number(s ?? 0) || 0, 0), Math.max(students.length - 1, 0));
-  const current = students[index];
-
-  const view = current ? await getMatchView(current.email) : null;
-  const result = view?.summary.results.find((r) => r.opportunityId === row.id);
-  const categories: string[] = row.categories ? JSON.parse(row.categories) : [];
+  const view = await getMatchView(current.email);
+  const result = view?.summary.results.find((r) => r.opportunityId === row.id) ?? null;
+  const categories = parseList(row.categories);
   const matchInput = view ? toMatchInput(view.student) : null;
 
+  const verified = row.verificationStatus === "VERIFIED";
+
   return (
-    <div className="space-y-6">
-      <div className="text-sm">
-        <Link href={`/opportunities?s=${index}`} className="text-slate-500 hover:underline">
+    <>
+      <p className="text-sm">
+        <Link href={withStudent("/opportunities", index)} className="text-zinc-500 hover:underline">
           ← All opportunities
         </Link>
-      </div>
+      </p>
 
-      <header>
-        <div className="flex flex-wrap gap-2 text-xs">
-          <span className="rounded bg-slate-100 px-2 py-0.5">{row.type}</span>
+      <PageHeader eyebrow={TYPE_LABELS[row.type] ?? row.type} title={row.title} description={row.provider}>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant={verified ? "outline" : "dotted"}>
+            {verified ? "✓ verified listing" : "⚠ unverified listing"}
+          </Badge>
           {categories.map((category) => (
-            <span key={category} className="rounded bg-indigo-50 px-2 py-0.5 text-indigo-700">
+            <Badge key={category} variant="muted">
               {category.toLowerCase().replaceAll("_", " ")}
-            </span>
+            </Badge>
           ))}
-          {row.countryCode && <span className="text-slate-400">{row.countryCode}</span>}
+          {row.countryCode && <Badge variant="muted">{row.countryCode}</Badge>}
+          <DeadlineBadge deadline={row.deadline} />
         </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">{row.title}</h1>
-        <p className="text-sm text-slate-600">{row.provider}</p>
-      </header>
+      </PageHeader>
 
       {/* Verification state is always visible — plan risk R1. */}
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <strong>
-          {row.verificationStatus === "VERIFIED" ? "Verified listing" : "Unverified listing"}
-        </strong>{" "}
-        —{" "}
+      <Callout
+        tone={verified ? "note" : "caution"}
+        title={verified ? "Checked against the official page" : "Nobody has checked this listing yet"}
+      >
         {row.lastVerifiedAt
-          ? `last checked ${row.lastVerifiedAt.toISOString().slice(0, 10)}.`
-          : "not yet checked by an administrator."}{" "}
-        Always confirm the current requirements and deadline on the official page
+          ? `Last checked ${formatDeadlineDay(row.lastVerifiedAt)}.`
+          : "No check date recorded."}{" "}
+        {row.deadline ? (
+          <>
+            <DeadlineSentence deadline={row.deadline} /> The closing time matters: HEC portals shut at
+            16:00 PKT, not at midnight. Requirements also change every cycle — confirm on the
+            official page before you invest time in an application.
+          </>
+        ) : (
+          <>
+            <strong className="text-zinc-900">No deadline is shown.</strong> The awarding body
+            either sets it locally (your university) or has not published this cycle&apos;s date.
+            Neither is a reason to guess.
+          </>
+        )}
         {row.sourceUrl && (
           <>
             {" "}
-            (
-            <a href={row.sourceUrl} className="underline" target="_blank" rel="noreferrer">
-              source
+            Source:{" "}
+            <a
+              href={row.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              official page
             </a>
-            )
           </>
         )}
-        . Deadline is not shown because it has not been confirmed.
-      </div>
+      </Callout>
 
-      {/* Match result */}
+      {/* ── Match result ─────────────────────────────────────────────────── */}
       {result && (
-        <section
-          className={`rounded-lg border p-5 ${
-            result.eligible
-              ? "border-emerald-200 bg-emerald-50"
-              : result.nearMiss
-                ? "border-amber-200 bg-amber-50"
-                : "border-slate-200 bg-white"
-          }`}
-        >
-          {result.eligible ? (
-            <>
-              <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <h2 className="font-medium text-emerald-900">
-                  You match this opportunity for {current?.name.split(" ")[0]}
-                </h2>
-                <p className="text-3xl font-semibold tabular-nums text-emerald-900">
-                  {result.score}%
+        <Section title="Where you stand">
+          <Card
+            title={
+              result.eligible
+                ? `You match this for ${current.name.split(" ")[0]}`
+                : result.nearMiss
+                  ? "Close — here is exactly what is missing"
+                  : "Not eligible yet"
+            }
+            action={
+              result.eligible ? (
+                <span className="mm-num text-2xl font-semibold">{result.score}%</span>
+              ) : result.nearMiss ? (
+                <Badge variant="dotted">near-miss</Badge>
+              ) : (
+                <Badge variant="outline">✕ not eligible</Badge>
+              )
+            }
+          >
+            {result.eligible ? (
+              <>
+                <ul className="space-y-1">
+                  {result.reasons.map((reason) => (
+                    <li key={reason} className="text-sm text-zinc-700">
+                      <span aria-hidden>{CAUTION_REASONS.has(reason) ? "⚠ " : "✓ "}</span>
+                      {REASON_LABELS[reason] ?? reason}
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="mt-4 space-y-2">
+                  {result.breakdown.map((component) => (
+                    <div key={component.code}>
+                      <div className="flex justify-between text-xs">
+                        <span>
+                          {COMPONENT_LABELS[component.code] ?? component.code}{" "}
+                          <span className="text-zinc-400">weight {component.weight}</span>
+                        </span>
+                        <span className="mm-num text-zinc-600">
+                          {component.points} / {component.weight}
+                        </span>
+                      </div>
+                      <Bar value={component.points} className="mt-0.5" />
+                    </div>
+                  ))}
+                </div>
+
+                <p className="mt-3 text-xs text-zinc-500">
+                  Adjusted by data freshness (×{result.freshnessFactor}) and how complete your
+                  profile is (×{result.confidenceFactor}).{" "}
+                  {result.unverifiedCriteria.length > 0 && (
+                    <>
+                      Assumed eligible on{" "}
+                      {result.unverifiedCriteria.join(", ").toLowerCase().replaceAll("_", " ")} —
+                      we had nothing to check those against.
+                    </>
+                  )}
                 </p>
-              </div>
-
-              <ul className="mt-3 space-y-1">
-                {result.reasons.map((reason) => (
-                  <li key={reason} className="text-sm text-emerald-800">
-                    ✓ {REASON_LABELS[reason] ?? reason}
-                  </li>
-                ))}
-              </ul>
-
-              <div className="mt-4 space-y-2">
-                {result.breakdown.map((component) => (
-                  <div key={component.code} className="text-xs">
-                    <div className="flex justify-between">
-                      <span>
-                        {COMPONENT_LABELS[component.code] ?? component.code}{" "}
-                        <span className="text-slate-400">weight {component.weight}</span>
-                      </span>
-                      <span className="tabular-nums">{component.points} pts</span>
-                    </div>
-                    <div className="mt-0.5 h-2 overflow-hidden rounded-full bg-white">
-                      <div
-                        className="h-full rounded-full bg-emerald-500"
-                        style={{ width: `${Math.min(100, component.points)}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <p className="mt-3 text-xs text-emerald-700">
-                Adjusted by data freshness (×{result.freshnessFactor}) and profile completeness
-                (×{result.confidenceFactor}).
-              </p>
-            </>
-          ) : (
-            <>
-              <h2 className="font-medium">
-                {result.nearMiss ? "You are very close — worth a look" : "Not eligible yet"}
-              </h2>
-              <ul className="mt-2 space-y-2">
+              </>
+            ) : (
+              <ul className="space-y-2">
                 {result.disqualifiers.map((disqualifier) => (
                   <li key={disqualifier.code} className="text-sm">
+                    <span aria-hidden>✕ </span>
                     <span className="font-medium">{disqualifier.label}:</span>{" "}
-                    <span className="text-slate-700">{disqualifier.humanText}</span>
+                    <span className="text-zinc-600">{disqualifier.humanText}</span>
                   </li>
                 ))}
+                {result.nearMiss && (
+                  <li className="mt-3 text-xs text-zinc-600">
+                    This is a small gap, not a closed door. It is shown as a near-miss rather than
+                    hidden so you can judge whether closing it is realistic.
+                  </li>
+                )}
               </ul>
-            </>
-          )}
-        </section>
+            )}
+          </Card>
+        </Section>
       )}
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 className="font-medium">About this opportunity</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-700">{row.description}</p>
-        {row.applyUrl && (
-          <a
-            href={row.applyUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-block rounded bg-slate-900 px-4 py-2 text-sm text-white"
-          >
-            Apply on the official site →
-          </a>
-        )}
-      </section>
+      {/* ── About ────────────────────────────────────────────────────────── */}
+      <Section title="About this opportunity">
+        <Card>
+          <p className="text-sm leading-relaxed text-zinc-700">{row.description}</p>
+          {row.scholarship && (
+            <dl className="mm-rule mt-4 grid gap-2 pt-3 text-xs text-zinc-600 sm:grid-cols-2">
+              {row.scholarship.tuitionCoverage && (
+                <div className="flex justify-between">
+                  <dt>Tuition</dt>
+                  <dd>
+                    {row.scholarship.tuitionCoverage === "FULL"
+                      ? "fully covered"
+                      : row.scholarship.tuitionCoverage === "PERCENT" &&
+                          row.scholarship.tuitionCoveragePercent
+                        ? `${row.scholarship.tuitionCoveragePercent}%`
+                        : row.scholarship.tuitionCoverage.toLowerCase()}
+                  </dd>
+                </div>
+              )}
+              {row.scholarship.coversLiving && (
+                <div className="flex justify-between">
+                  <dt>Living costs</dt>
+                  <dd>covered</dd>
+                </div>
+              )}
+              {row.scholarship.coversTravel && (
+                <div className="flex justify-between">
+                  <dt>Travel</dt>
+                  <dd>covered</dd>
+                </div>
+              )}
+              {row.stipendMin && (
+                <div className="flex justify-between">
+                  <dt>Stipend from</dt>
+                  <dd className="mm-num">{pkr(row.stipendMin)}</dd>
+                </div>
+              )}
+            </dl>
+          )}
+          {row.applyUrl && (
+            <div className="mt-4">
+              <ButtonLink href={row.applyUrl}>Apply on the official site →</ButtonLink>
+            </div>
+          )}
+        </Card>
+      </Section>
 
-      {/* Eligibility criteria, each shown with this student's evaluation */}
+      {/* ── Criteria, each evaluated against this student ────────────────── */}
       {matchInput && row.criteria.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5">
-          <h2 className="font-medium">Eligibility requirements</h2>
-          <table className="mt-3 w-full text-sm">
-            <tbody>
-              {row.criteria.map((criterion) => {
-                const outcome = evaluateCriterion(
-                  {
-                    code: criterion.code as never,
-                    operator: criterion.operator as never,
-                    value: JSON.parse(criterion.value),
-                    required: criterion.required,
-                    label: criterion.label ?? undefined,
-                  },
-                  matchInput,
-                );
-                return (
-                  <tr key={criterion.id} className="border-b border-slate-100 last:border-0">
-                    <td className="py-2 pr-3">
-                      <span className="block font-medium">
+        <Section
+          title="Eligibility requirements"
+          description="Every published requirement, evaluated against your profile. Nothing here is decided by a language model."
+        >
+          <Card>
+            <table className="mm-table">
+              <thead>
+                <tr>
+                  <th>Requirement</th>
+                  <th>Published rule</th>
+                  <th className="text-right">Your position</th>
+                </tr>
+              </thead>
+              <tbody>
+                {row.criteria.map((criterion) => {
+                  const outcome = evaluateCriterion(
+                    {
+                      code: criterion.code as never,
+                      operator: criterion.operator as never,
+                      value: parseObject(criterion.value),
+                      required: criterion.required,
+                      label: criterion.label ?? undefined,
+                    },
+                    matchInput,
+                  );
+                  return (
+                    <tr key={criterion.id}>
+                      <td className="font-medium">
                         {criterion.label ?? criterion.code.toLowerCase().replaceAll("_", " ")}
-                      </span>
-                      <span className="text-xs text-slate-400">{JSON.stringify(JSON.parse(criterion.value))}</span>
-                    </td>
-                    <td className="py-2 text-right">
-                      {!outcome.evaluable ? (
-                        <span className="text-xs text-amber-700">assumed — add your details</span>
-                      ) : outcome.passed ? (
-                        <span className="text-emerald-700">✓ you match</span>
-                      ) : (
-                        <span className="text-slate-500">✕ {outcome.disqualifier?.humanText}</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </section>
+                      </td>
+                      <td className="text-xs text-zinc-500">
+                        {criterionValue(parseObject(criterion.value))}
+                      </td>
+                      <td className="text-right text-xs">
+                        {!outcome.evaluable ? (
+                          <Badge variant="dotted">assumed — add your details</Badge>
+                        ) : outcome.passed ? (
+                          <Badge variant="outline">✓ you match</Badge>
+                        ) : (
+                          <span className="text-zinc-600">
+                            <span aria-hidden>✕ </span>
+                            {outcome.disqualifier?.humanText}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </Section>
       )}
 
       {row.documents.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5">
-          <h2 className="font-medium">Documents you will need</h2>
-          <ul className="mt-3 space-y-1 text-sm">
-            {row.documents.map((document) => (
-              <li key={document.id} className="flex items-center gap-2">
-                <span aria-hidden>📄</span>
-                {document.label}
-                {document.required && <span className="text-xs text-slate-400">required</span>}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3 text-xs text-slate-500">
-            Checked as of {todayISO()}. Requirements change — confirm on the official page.
-          </p>
-        </section>
+        <Section
+          title="Documents you will need"
+          description="Collect these early — most of the delay in these applications is document chasing, not writing."
+        >
+          <Card>
+            <ul className="space-y-1 text-sm">
+              {row.documents.map((document) => (
+                <li key={document.id} className="flex items-center gap-2">
+                  <span aria-hidden>{document.required ? "■" : "□"}</span>
+                  {document.label}
+                  <span className="text-xs text-zinc-500">
+                    {document.required ? "required" : "optional"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mm-rule mt-3 pt-3 text-xs text-zinc-500">
+              Checked as of {todayPK()}. Requirements change — confirm on the official page.
+            </p>
+          </Card>
+        </Section>
       )}
-    </div>
+    </>
   );
 }

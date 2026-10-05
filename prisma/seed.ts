@@ -18,7 +18,7 @@ import {
 } from "../src/config/pakistan";
 import { computeFinancialNeed } from "../src/domain/financial/score";
 import { classifyConcerns } from "../src/domain/wellbeing/classifier";
-import { PK_DEMO_STUDENTS, PK_OPPORTUNITIES, PK_SUPPORT_SERVICES } from "./seed-data-pk";
+import { PK_DEMO_STUDENTS, PK_HEC_PROGRAMMES, PK_OPPORTUNITIES, PK_SUPPORT_SERVICES } from "./seed-data-pk";
 
 const url = process.env.DATABASE_URL ?? "file:./dev.db";
 const prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url }) });
@@ -40,6 +40,8 @@ async function main(): Promise<void> {
   await prisma.opportunity.deleteMany();
   await prisma.academicProfile.deleteMany();
   await prisma.financialProfile.deleteMany();
+  await prisma.personalisationProfile.deleteMany();
+  await prisma.budgetPlan.deleteMany();
   await prisma.studentProfile.deleteMany();
   await prisma.consentRecord.deleteMany();
   await prisma.auditLog.deleteMany();
@@ -101,7 +103,9 @@ async function main(): Promise<void> {
   console.log(`  ✓ ${PK_SUPPORT_SERVICES.length} support services (all UNVERIFIED)`);
 
   // ── Opportunities ─────────────────────────────────────────────────────────
-  for (const opportunity of PK_OPPORTUNITIES) {
+  // Verified official-channel programmes first, then indicative public listings.
+  const allOpportunities = [...PK_HEC_PROGRAMMES, ...PK_OPPORTUNITIES];
+  for (const opportunity of allOpportunities) {
     await prisma.opportunity.create({
       data: {
         type: opportunity.type,
@@ -111,14 +115,17 @@ async function main(): Promise<void> {
         countryCode: opportunity.countryCode,
         description: opportunity.description,
         categories: JSON.stringify(opportunity.categories),
-        // Deadlines deliberately null — see seed-data-pk.ts header.
-        deadline: null,
+        // Omitted ⇒ NULL. We never assert a deadline we have not seen on the
+        // official page, and past deadlines are kept so they report as closed.
+        deadline: opportunity.deadline ? new Date(opportunity.deadline) : null,
         applyUrl: opportunity.applyUrl,
         isPaid: opportunity.isPaid,
         stipendMin: opportunity.stipendMin,
-        verificationStatus: "UNVERIFIED",
+        verificationStatus: opportunity.verificationStatus ?? "UNVERIFIED",
         sourceUrl: opportunity.sourceUrl,
-        lastVerifiedAt: null,
+        lastVerifiedAt: opportunity.lastVerifiedAt
+          ? new Date(`${opportunity.lastVerifiedAt}T00:00:00Z`) // date of the check, not a deadline
+          : null,
         criteria: {
           create: opportunity.criteria.map((criterion, index) => ({
             code: criterion.code,
@@ -153,7 +160,7 @@ async function main(): Promise<void> {
       },
     });
   }
-  console.log(`  ✓ ${PK_OPPORTUNITIES.length} public opportunities`);
+  console.log(`  ✓ ${allOpportunities.length} opportunities (${PK_HEC_PROGRAMMES.length} verified from hec.gov.pk)`);
 
   // ── Demo students ─────────────────────────────────────────────────────────
   for (const student of PK_DEMO_STUDENTS) {
@@ -178,6 +185,7 @@ async function main(): Promise<void> {
         field: student.field,
         graduationYear: student.graduationYear,
         ageAtSignup: student.ageAtSignup,
+        gender: student.gender,
         documentsOnHand: JSON.stringify(student.documentsOnHand),
         profileComplete: true,
       },
@@ -189,6 +197,37 @@ async function main(): Promise<void> {
         cgpa: student.cgpa,
         cgpaScale: 4.0,
         field: student.field,
+        hatScore: student.hatScore,
+      },
+    });
+
+    await prisma.personalisationProfile.create({
+      data: {
+        userId: user.id,
+        primaryGoal: student.personalisation.primaryGoal,
+        secondaryGoals: JSON.stringify(student.personalisation.secondaryGoals),
+        stressTriggers: JSON.stringify(student.personalisation.stressTriggers),
+        supportPreference: student.personalisation.supportPreference,
+        availableHoursPerWeek: student.personalisation.availableHoursPerWeek,
+        studyStyle: student.personalisation.studyStyle,
+        commuteMinutes: student.personalisation.commuteMinutes,
+        workCommitment: student.personalisation.workCommitment,
+        caresForOthers: student.personalisation.caresForOthers,
+        tonePreference: student.personalisation.tonePreference,
+        completedAt: new Date(),
+      },
+    });
+
+    // The planner is a pure function of these inputs, so only the inputs are
+    // stored — the plan itself is recomputed on every page load.
+    await prisma.budgetPlan.create({
+      data: {
+        userId: user.id,
+        incomeSources: JSON.stringify(student.incomeSources),
+        expenses: JSON.stringify(student.budgetExpenses),
+        annualTuition: student.tuitionAnnual,
+        termsPerYear: student.termsPerYear,
+        bufferTargetMonths: 3,
       },
     });
 

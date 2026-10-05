@@ -1,22 +1,36 @@
-import Link from "next/link";
-import {
-  getWellbeing,
-  listDemoStudents,
-} from "@/server/services/matching.service";
+import { NO_STUDENTS, resolveDemoStudent, withStudent } from "@/server/services/demo";
+import { getWellbeing } from "@/server/services/matching.service";
 import {
   actionsFor,
   CATEGORY_LABELS,
   CONCERN_CATEGORIES,
   type ConcernCategory,
 } from "@/domain/wellbeing/classifier";
+import {
+  Badge,
+  Bar,
+  ButtonLink,
+  Callout,
+  Card,
+  Empty,
+  LinkRow,
+  PageHeader,
+  Section,
+  Stat,
+} from "@/components/ui";
 import { createCheckin } from "./actions";
 
+/**
+ * Moods are labelled in words, not emoji. Emoji-only options read as a game,
+ * and several students here will be describing distress — the label is the
+ * thing they are actually choosing, so the label is what has to be honest.
+ */
 const MOODS = [
-  { code: "GOOD", label: "😊 Good" },
-  { code: "OK", label: "🙂 Okay" },
-  { code: "NEUTRAL", label: "😐 Neutral" },
-  { code: "STRESSED", label: "😟 Stressed" },
-  { code: "VERY_STRESSED", label: "😞 Very stressed" },
+  { code: "GOOD", label: "Good" },
+  { code: "OK", label: "Okay" },
+  { code: "NEUTRAL", label: "Neutral" },
+  { code: "STRESSED", label: "Stressed" },
+  { code: "VERY_STRESSED", label: "Very stressed" },
 ];
 
 const FACTOR_LABELS: Record<string, string> = {
@@ -29,7 +43,9 @@ const FACTOR_LABELS: Record<string, string> = {
   LONELINESS: "Loneliness",
   SLEEP: "Sleep",
   HEALTH: "Health",
-  OTHER: "Other",
+  HOUSING: "Where I live",
+  TRANSPORT: "Getting to campus",
+  OTHER: "Something else",
 };
 
 export default async function CheckinPage({
@@ -37,229 +53,220 @@ export default async function CheckinPage({
 }: {
   searchParams: Promise<{ s?: string }>;
 }) {
-  const params = await searchParams;
-  const students = await listDemoStudents();
-  const index = Math.min(Math.max(Number(params.s ?? 0) || 0, 0), Math.max(students.length - 1, 0));
-  const current = students[index];
-  if (!current) return <p className="text-slate-600">No demo students. Run: npm run db:seed</p>;
+  const { index, current } = await resolveDemoStudent(await searchParams);
+  if (!current) return <Empty>{NO_STUDENTS}</Empty>;
 
   const wellbeing = await getWellbeing(current.email);
   const latest = wellbeing.latest;
   const dominant = latest?.dominantConcern as ConcernCategory | null | undefined;
 
   return (
-    <div className="space-y-8">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Daily check-in</h1>
-        <p className="text-sm text-slate-600">
-          {current.name} · this classifies your situation, it does not diagnose anything
-        </p>
-      </header>
+    <>
+      <PageHeader
+        eyebrow="Check-in"
+        title="How is today?"
+        description={`${current.name} · this sorts your situation into themes so the right next steps appear. It does not diagnose anything, and nothing here is shared with staff.`}
+      />
 
       {latest?.crisisDetected && (
-        <section className="rounded-lg border border-red-300 bg-red-50 p-5">
-          <h2 className="font-semibold text-red-900">Please talk to someone today</h2>
-          <p className="mt-1 text-sm text-red-800">
-            Your last note suggests you may be in distress. These services are free and
-            confidential.
-          </p>
-          <Link
-            href="/support"
-            className="mt-3 inline-block rounded bg-red-700 px-4 py-2 text-sm font-medium text-white"
-          >
-            See crisis contacts now
-          </Link>
-        </section>
+        <Callout
+          tone="urgent"
+          title="Please talk to someone today"
+          action={
+            <ButtonLink href={withStudent("/support", index)}>See crisis contacts now</ButtonLink>
+          }
+        >
+          Your last note suggests you may be in distress. These services are free and confidential.
+          You do not need a referral, and you do not need to explain yourself first.
+        </Callout>
       )}
 
       <div className="grid gap-6 lg:grid-cols-5">
-        {/* Form */}
-        <section className="rounded-lg border border-slate-200 bg-white p-5 lg:col-span-2">
-          <h2 className="font-medium">How are you feeling today?</h2>
-          <form action={createCheckin} className="mt-4 space-y-4">
-            <input type="hidden" name="email" value={current.email} />
+        {/* ── Form ────────────────────────────────────────────────────── */}
+        <Section title="1 · Today's entry" >
+          <Card>
+            <form action={createCheckin} className="space-y-5">
+              <input type="hidden" name="email" value={current.email} />
 
-            <div className="flex flex-wrap gap-2">
-              {MOODS.map((mood, position) => (
-                <label
-                  key={mood.code}
-                  className="cursor-pointer rounded border border-slate-300 px-3 py-1.5 text-sm has-[:checked]:border-slate-900 has-[:checked]:bg-slate-900 has-[:checked]:text-white"
-                >
-                  <input
-                    type="radio"
-                    name="moodCode"
-                    value={mood.code}
-                    defaultChecked={position === 2}
-                    className="sr-only"
-                  />
-                  {mood.label}
+              <fieldset>
+                <legend className="text-sm font-medium text-zinc-900">
+                  How are you feeling today?
+                </legend>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {MOODS.map((mood, position) => (
+                    <label key={mood.code} className="mm-choice">
+                      <input
+                        type="radio"
+                        name="moodCode"
+                        value={mood.code}
+                        defaultChecked={position === 2}
+                        className="sr-only"
+                      />
+                      {mood.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <div>
+                <label htmlFor="stressLevel" className="text-sm font-medium text-zinc-900">
+                  Stress level: <span className="mm-num">5</span> / 10
                 </label>
-              ))}
-            </div>
-
-            <div>
-              <label htmlFor="stressLevel" className="text-sm text-slate-600">
-                Stress level: <span className="font-medium text-slate-900">5</span>/10
-              </label>
-              <input
-                id="stressLevel"
-                name="stressLevel"
-                type="range"
-                min={1}
-                max={10}
-                defaultValue={5}
-                className="mt-1 w-full"
-              />
-            </div>
-
-            <fieldset>
-              <legend className="text-sm text-slate-600">What is affecting you?</legend>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {Object.entries(FACTOR_LABELS).map(([code, label]) => (
-                  <label key={code} className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" name="tags" value={code} className="rounded" />
-                    {label}
-                  </label>
-                ))}
+                <input
+                  id="stressLevel"
+                  name="stressLevel"
+                  type="range"
+                  min={1}
+                  max={10}
+                  defaultValue={5}
+                  className="mt-2 w-full"
+                />
+                <p className="text-xs text-zinc-500">1 is calm, 10 is as bad as it gets today.</p>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Ticking a box is treated as a label — it takes priority over the text analysis.
-              </p>
-            </fieldset>
 
-            <div>
-              <label htmlFor="note" className="text-sm text-slate-600">
-                Anything you want to add? (optional)
-              </label>
-              <textarea
-                id="note"
-                name="note"
-                rows={3}
-                maxLength={2000}
-                className="mt-1 w-full rounded border border-slate-300 p-2 text-sm"
-                placeholder="e.g. My semester fees are due and I am not sure how I will manage."
-              />
-              <p className="mt-1 text-xs text-slate-500">
-                Stored privately. Never shown to staff or administrators.
-              </p>
-            </div>
+              <fieldset>
+                <legend className="text-sm font-medium text-zinc-900">
+                  What is affecting you?
+                </legend>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {Object.entries(FACTOR_LABELS).map(([code, label]) => (
+                    <label key={code} className="mm-choice">
+                      <input type="checkbox" name="tags" value={code} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-zinc-500">
+                  Ticking a box takes priority over the text — use it if what you feel does not fit
+                  the words below.
+                </p>
+              </fieldset>
 
-            <button
-              type="submit"
-              className="w-full rounded bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700"
-            >
-              Save check-in
-            </button>
-          </form>
-        </section>
+              <div>
+                <label htmlFor="note" className="text-sm font-medium text-zinc-900">
+                  Anything you want to add? (optional)
+                </label>
+                <textarea
+                  id="note"
+                  name="note"
+                  rows={4}
+                  maxLength={2000}
+                  className="mm-input mt-2"
+                  placeholder="e.g. My semester fees are due and I am not sure how I will manage."
+                />
+                <p className="mt-1 text-xs text-zinc-500">
+                  Stored privately. Never shown to staff or administrators, and never used to
+                  decide a funding match.
+                </p>
+              </div>
 
-        {/* Results */}
+              <button type="submit" className="mm-btn w-full">
+                Save check-in
+              </button>
+            </form>
+          </Card>
+        </Section>
+
+        {/* ── Results ─────────────────────────────────────────────────── */}
         <div className="space-y-6 lg:col-span-3">
           {latest && (
-            <section className="rounded-lg border border-slate-200 bg-white p-5">
-              <div className="flex items-baseline justify-between">
-                <h2 className="font-medium">Latest analysis</h2>
-                <span className="text-xs text-slate-400">{latest.day}</span>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-4">
-                <div>
-                  <p className="text-3xl font-semibold tabular-nums">
-                    {latest.stressLevel}
-                    <span className="text-base text-slate-400">/10</span>
-                  </p>
-                  <p className="text-xs text-slate-500">stress</p>
+            <Section title="2 · What came back">
+              <Card>
+                <div className="grid gap-6 sm:grid-cols-3">
+                  <Stat label="Stress" value={latest.stressLevel} unit="/10" note={latest.day} />
+                  <Stat
+                    label="Top concern"
+                    value={dominant ? CATEGORY_LABELS[dominant] : "—"}
+                    note={
+                      latest.confidence !== null
+                        ? `${Math.round(latest.confidence * 100)}% of the evidence pointed here`
+                        : undefined
+                    }
+                  />
+                  <Stat
+                    label="Recent average"
+                    value={wellbeing.averageStress ?? "—"}
+                    unit={wellbeing.averageStress !== null ? "/10" : undefined}
+                    note="Across your recent check-ins"
+                  />
                 </div>
-                {dominant && (
-                  <div>
-                    <p className="text-3xl font-semibold">
-                      {CATEGORY_LABELS[dominant]}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      top concern{latest.confidence !== null && ` (${Math.round(latest.confidence * 100)}% of evidence)`}
-                    </p>
+
+                {latest.tags.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-1.5">
+                    {latest.tags.map((tag) => (
+                      <Badge key={tag} variant="muted">
+                        {FACTOR_LABELS[tag] ?? tag}
+                      </Badge>
+                    ))}
                   </div>
                 )}
-              </div>
 
-              {latest.tags.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-1.5 text-xs">
-                  {latest.tags.map((tag) => (
-                    <span key={tag} className="rounded bg-slate-100 px-2 py-1 text-slate-600">
-                      {FACTOR_LABELS[tag] ?? tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {latest.scores && (
-                <div className="mt-4 space-y-1">
-                  {CONCERN_CATEGORIES.filter((c) => (latest.scores?.[c] ?? 0) > 0).map((category) => (
-                    <div key={category} className="flex items-center gap-2 text-xs">
-                      <span className="w-28 shrink-0 text-slate-500">
-                        {CATEGORY_LABELS[category]}
-                      </span>
-                      <span className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
-                        <span
-                          className="block h-full bg-indigo-400"
-                          style={{
-                            width: `${Math.min(100, (latest.scores?.[category] ?? 0) * 20)}%`,
-                          }}
-                        />
-                      </span>
-                      <span className="w-8 shrink-0 text-right tabular-nums text-slate-500">
-                        {(latest.scores?.[category] ?? 0).toFixed(1)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+                {latest.scores && (
+                  <div className="mm-rule mt-4 space-y-1 pt-3">
+                    <p className="mm-eyebrow">Every theme scored, including the low ones</p>
+                    {CONCERN_CATEGORIES.filter((c) => (latest.scores?.[c] ?? 0) > 0).map((category) => (
+                      <div key={category} className="flex items-center gap-2 text-xs">
+                        <span className="w-28 shrink-0 text-zinc-500">
+                          {CATEGORY_LABELS[category]}
+                        </span>
+                        <Bar value={(latest.scores?.[category] ?? 0) * 20} className="flex-1" />
+                        <span className="mm-num w-10 shrink-0 text-right text-zinc-500">
+                          {(latest.scores?.[category] ?? 0).toFixed(1)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </Section>
           )}
 
           {dominant && (
-            <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-5">
-              <h2 className="font-medium text-indigo-900">
-                What would actually help with {CATEGORY_LABELS[dominant].toLowerCase()}
-              </h2>
-              <ul className="mt-3 space-y-2">
+            <Section
+              title={`3 · What would actually help with ${CATEGORY_LABELS[dominant].toLowerCase()}`}
+              description="Routed from the concern, not chosen by hand."
+            >
+              <div className="grid gap-2 sm:grid-cols-2">
                 {actionsFor(dominant).map((action) => (
-                  <li key={action.target + action.remedy}>
-                    <Link
-                      href={`${action.target}${action.target.includes("?") ? "&" : "?"}s=${index}`}
-                      className="block rounded border border-indigo-200 bg-white p-3 text-sm hover:border-indigo-400"
-                    >
-                      {action.remedy}
-                    </Link>
-                  </li>
+                  <LinkRow
+                    key={action.target + action.remedy}
+                    href={withStudent(action.target, index)}
+                  >
+                    {action.remedy}
+                  </LinkRow>
                 ))}
-              </ul>
-            </section>
+              </div>
+            </Section>
           )}
 
           {wellbeing.history.length > 0 && (
-            <section className="rounded-lg border border-slate-200 bg-white p-5">
-              <h2 className="font-medium">Your trend</h2>
-              <p className="text-xs text-slate-500">
-                {wellbeing.history.length} recent check-ins · average stress{" "}
-                {wellbeing.averageStress}/10
-              </p>
-              <div className="mt-3 flex items-end gap-1">
-                {wellbeing.history.map((entry) => (
-                  <div key={entry.day} className="flex flex-1 flex-col items-center gap-1">
-                    <span className="text-xs tabular-nums text-slate-500">{entry.stressLevel}</span>
-                    <span
-                      className="w-full rounded-t bg-indigo-400"
-                      style={{ height: `${entry.stressLevel * 8}px` }}
-                    />
-                    <span className="text-[10px] text-slate-400">{entry.day.slice(5)}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <Section title="4 · Your trend" description={`${wellbeing.history.length} recent check-ins.`}>
+              <Card>
+                <div className="flex items-end gap-1">
+                  {wellbeing.history.map((entry) => (
+                    <div key={entry.day} className="flex flex-1 flex-col items-center gap-1">
+                      <span className="mm-num text-xs text-zinc-500">{entry.stressLevel}</span>
+                      <span
+                        className="w-full rounded-t-sm bg-zinc-900"
+                        style={{ height: `${entry.stressLevel * 8}px` }}
+                      />
+                      <span className="text-[10px] text-zinc-500">{entry.day.slice(5)}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mm-rule mt-4 pt-3 text-xs leading-relaxed text-zinc-600">
+                  A trend is useful; a single day is not. If this chart has been high for weeks,
+                  that is worth taking to a person — see{" "}
+                  <a href={withStudent("/support", index)} className="underline">
+                    support
+                  </a>
+                  .
+                </p>
+              </Card>
+            </Section>
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }

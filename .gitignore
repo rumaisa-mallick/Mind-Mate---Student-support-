@@ -44,7 +44,18 @@ next-env.d.ts
 
 # generated prisma client
 src/generated/
-prisma/*.db
-prisma/*.db-journal
+
+# SQLite databases.
+# `DATABASE_URL="file:./dev.db"` resolves from the project root, NOT from
+# prisma/ — so the live dev.db sits at the root and a prisma/*.db rule alone
+# leaves the actual database tracked in git. Ignore it everywhere.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
 server.log
+server.err.log
 test-out.txt
+t.txt
+tmp-*.ts

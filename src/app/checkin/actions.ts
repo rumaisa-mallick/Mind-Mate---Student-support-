@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/server/db/client";
 import { classifyConcerns, type CheckinFactor } from "@/domain/wellbeing/classifier";
+import { todayPK } from "@/domain/shared/dates";
 
 const CheckinSchema = z.object({
   email: z.string().email(),
@@ -33,7 +34,7 @@ export async function createCheckin(formData: FormData): Promise<void> {
   if (!parsed.success) return;
 
   const { email, moodCode, stressLevel, note, tags } = parsed.data;
-  const day = new Date().toISOString().slice(0, 10);
+  const day = todayPK();
 
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return;

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test tests/unit/financial-score.test.ts tests/unit/matching.test.ts tests/unit/classifier.test.ts",
+    "test": "node --import tsx --test \"tests/unit/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
     "db:migrate": "prisma migrate dev",
     "db:seed": "node --import tsx prisma/seed.ts",
     "db:studio": "prisma studio"
